@@ -163,7 +163,7 @@ Reports are saved as `.md` files and can be viewed in:
 ## 👨🏽‍💻 Author
 
 **Kanmi Obasa**  
-[github.com/konfirmed](https://github.com/konfirmed) • [knfrmd.dev](https://knfrmd.dev)
+[github.com/konfirmed](https://github.com/konfirmed)
 
 ---
 
