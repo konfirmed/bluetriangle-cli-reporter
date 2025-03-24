@@ -53,6 +53,14 @@ SITE_PREFIX = "your_site_prefix"
 
 ## 🛠 Usage
 
+### ⚡ Try It in 60 Seconds
+
+```bash
+git clone https://github.com/konfirmed/bluetriangle-cli-reporter.git
+cd bluetriangle-cli-reporter
+pip install -r requirements.txt
+python script.py --page pdp checkout --time-range 7d --output report.md
+```
 Run the CLI with your desired flags:
 
 ```bash
@@ -181,3 +189,6 @@ MIT — see [LICENSE](LICENSE)
 
 Building a premium version with GitHub/Slack integration, automatic trend detection, and visual dashboards.
 
+## Questions or Requests
+Have questions, ideas, or feature requests?  
+👉 [Open an issue](https://github.com/konfirmed/bluetriangle-cli-reporter/issues)
