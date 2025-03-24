@@ -1,4 +1,8 @@
-# 📊 Blue Triangle CLI Reporter
+# 📊 Blue Triangle CLI Reporter 
+![Python](https://img.shields.io/badge/python-3.7%2B-blue?logo=python)
+![License](https://img.shields.io/github/license/konfirmed/bluetriangle-cli-reporter)
+![Issues](https://img.shields.io/github/issues/konfirmed/bluetriangle-cli-reporter)
+![Last Commit](https://img.shields.io/github/last-commit/konfirmed/bluetriangle-cli-reporter)
 
 
 A powerful Python CLI that connects to the [Blue Triangle API](https://help.bluetriangle.com/hc/en-us/articles/360034915953-The-Blue-Triangle-API-Overview) to analyze real user monitoring (RUM) data and revenue impact — helping teams **track performance regressions**, **identify slow resources**, and **uncover revenue opportunities**.
@@ -175,9 +179,4 @@ Building a premium version with GitHub/Slack integration, automatic trend detect
 ## Questions or Requests
 Have questions, ideas, or feature requests?  
 👉 [Open an issue](https://github.com/konfirmed/bluetriangle-cli-reporter/issues)
-
-![Python](https://img.shields.io/badge/python-3.7%2B-blue?logo=python)
-![License](https://img.shields.io/github/license/konfirmed/bluetriangle-cli-reporter)
-![Issues](https://img.shields.io/github/issues/konfirmed/bluetriangle-cli-reporter)
-![Last Commit](https://img.shields.io/github/last-commit/konfirmed/bluetriangle-cli-reporter)
 
