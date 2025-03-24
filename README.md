@@ -24,17 +24,13 @@ A powerful Python CLI that connects to the [Blue Triangle API](https://help.blue
 - Python 3.7+
 - Blue Triangle site prefix, API Key, and email
 
-Install dependencies:
+### ⚡ Try It in 60 Seconds
 
 ```bash
+git clone https://github.com/konfirmed/bluetriangle-cli-reporter.git
+cd bluetriangle-cli-reporter
 pip install -r requirements.txt
-```
-
-`requirements.txt` includes:
-```
-pandas
-requests
-matplotlib
+python script.py --page pdp checkout --time-range 7d --output report.md
 ```
 
 ---
@@ -53,14 +49,6 @@ SITE_PREFIX = "your_site_prefix"
 
 ## 🛠 Usage
 
-### ⚡ Try It in 60 Seconds
-
-```bash
-git clone https://github.com/konfirmed/bluetriangle-cli-reporter.git
-cd bluetriangle-cli-reporter
-pip install -r requirements.txt
-python script.py --page pdp checkout --time-range 7d --output report.md
-```
 Run the CLI with your desired flags:
 
 ```bash
