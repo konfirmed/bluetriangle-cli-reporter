@@ -19,7 +19,7 @@ A Python-based CLI tool that connects to the Blue Triangle API and generates det
 ## 🧰 Requirements
 
 - Python 3.7+
-- Blue Triangle API Key and Email
+- Blue Triangle prefix, API Key and Email
 
 ### Install dependencies:
 ```
