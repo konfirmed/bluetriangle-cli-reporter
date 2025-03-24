@@ -26,30 +26,30 @@ A Python-based CLI tool that connects to the Blue Triangle API and generates det
 pip install -r requirements.txt
 ```
 
-Contents of requirements.txt:
+#### Contents of requirements.txt:
 ```
 pandas
 requests
 matplotlib
 ```
-🔐 Configuration
+### 🔐 Configuration
 Before running the CLI, open the script and set your credentials in the config section at the top:
 
 ```
 EMAIL = "your@email.com"
 API_KEY = "your_api_key"
 ```
-🛠 Usage
+### 🛠 Usage
 ```
 python script.py [OPTIONS]
 ```
-Basic Example
+#### Basic Example
 ```
 python script.py --page pdp checkout --time-range 7d
 ```
 Generates a performance report for pdp and checkout pages over the last 7 days.
 
-⚙️ Command Line Options
+### ⚙️ Command Line Options
 ```
 Flag	Description	Example
 --page	One or more specific page names to analyze	--page pdp checkout
@@ -63,7 +63,7 @@ Flag	Description	Example
 --help	Show CLI help	--help
 ```
 
-🗂 Available Time Ranges
+### 🗂 Available Time Ranges
 ```
 Code	Description
 qd	Quarter day (~6 hours)
@@ -80,7 +80,7 @@ xd	1.5 days
 2y	Last 2 years
 3y	Last 3 years
 ```
-📁 Sample Outputs
+### 📁 Sample Outputs
 Summary Table
 ```
 | Page     | Onload (Curr) | Onload (Prev) | LCP (Curr) | LCP (Prev) | ...
@@ -88,16 +88,16 @@ Summary Table
 | pdp      | 2800          | 2900          | 1800       | 2100       | ...
 ```
 
-Insights
-Performance deltas and insights (e.g., "LCP improved", "INP worsened")
+### Insights
+- Performance deltas and insights (e.g., "LCP improved", "INP worsened")
 
-Resource usage comparison
+- Resource usage comparison
 
-Revenue and lost revenue estimates
+- Revenue and lost revenue estimates
 
-Event markers from the Blue Triangle dashboard
+- Event markers from the Blue Triangle dashboard
 
-🧪 Sample Full Command
+### 🧪 Sample Full Command
 ```
 python script.py \
   --page pdp checkout \
@@ -106,7 +106,7 @@ python script.py \
   --metrics LCP TBT \
   --multi-range 24h,7d,28d
 ```
-📤 Output
+### 📤 Output
 Report is saved as a .md file.
 
 Can be viewed in any Markdown viewer or GitHub/GitLab.
@@ -115,7 +115,7 @@ Includes charts (if enabled via matplotlib).
 
 Optionally extend to export CSV or HTML in future versions.
 
-✅ TODOs & Improvements
+### ✅ TODOs & Improvements
  Add support for exporting CSV or PDF
 
  Add Slack/email integration for auto-sharing
@@ -124,7 +124,7 @@ Optionally extend to export CSV or HTML in future versions.
 
  Visualize charts automatically in Jupyter/CLI
 
-👨🏽‍💻 Author
+##### 👨🏽‍💻 Author
 Kanmi Obasa
 
 
