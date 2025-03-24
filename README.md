@@ -5,7 +5,7 @@
 ![Last Commit](https://img.shields.io/github/last-commit/konfirmed/bluetriangle-cli-reporter)
 
 
-A powerful Python CLI that connects to the [Blue Triangle API](https://help.bluetriangle.com/hc/en-us/articles/360034915953-The-Blue-Triangle-API-Overview) to analyze real user monitoring (RUM) data and revenue impact — helping teams **track performance regressions**, **identify slow resources**, and **uncover revenue opportunities**.
+A powerful Python CLI that connects to the [Blue Triangle API](https://help.bluetriangle.com/hc/en-us/articles/360034915953-The-Blue-Triangle-API-Overview) to analyze real user monitoring (RUM) data and revenue impact, helping teams **track performance regressions**, **identify slow resources**, and **uncover revenue opportunities**.
 
 ---
 
