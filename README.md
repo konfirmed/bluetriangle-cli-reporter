@@ -38,6 +38,7 @@ Before running the CLI, open the script and set your credentials in the config s
 ```
 EMAIL = "your@email.com"
 API_KEY = "your_api_key"
+ADD_PREFIX should be changed to your prefix
 ```
 ### 🛠 Usage
 ```
