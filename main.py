@@ -117,7 +117,7 @@ def fetch_top_page_names(limit=20, start=None, end=None):
     if end is None:
         end = now if now is not None else int(time.time())
     payload = {
-        "site": ADD_PREFIX,
+        "site": SITE_PREFIX,
         "start": start,
         "end": end,
         "dataColumns": ["pageViews"],
@@ -308,7 +308,7 @@ def get_page_performance(page_name: str) -> str:
     """
     # Set up payload for current window
     payload = {
-        "site": "ADD_PREFIX",
+        "site": "SITE_PREFIX",
         "start": one_day_ago,
         "end": now,
         "dataType": "rum",
@@ -462,7 +462,7 @@ def gather_page_metrics(page_name: str):
     global now, one_day_ago, two_days_ago
 
     payload = {
-        "site": "ADD_PREFIX",
+        "site": "SITE_PREFIX",
         "start": one_day_ago,
         "end": now,
         "dataType": "rum",
@@ -569,7 +569,7 @@ def make_summary_table(rows: list) -> str:
 
 
 def get_event_markers() -> str:
-    data = fetch_data(ENDPOINTS["event_markers"], method="GET", params={"prefix": "ADD_PREFIX"})
+    data = fetch_data(ENDPOINTS["event_markers"], method="GET", params={"prefix": "SITE_PREFIX"})
     if not data or "data" not in data:
         return "> ⚠️ No event markers found.\n"
     df = pd.DataFrame(data["data"])
@@ -595,7 +595,7 @@ def get_js_errors(page_name: str) -> str:
     """
     global now, one_day_ago
     payload = {
-        "site": "ADD_PREFIX",
+        "site": "SITE_PREFIX",
         "start": one_day_ago,
         "end": now,
         "dataType": "rum",  # Using RUM errors for JavaScript issues.
@@ -668,7 +668,7 @@ def get_resource_data(page_name: str, compare_previous=True) -> str:
     global now, one_day_ago, two_days_ago
 
     payload_curr = {
-        "site": "ADD_PREFIX",
+        "site": "SITE_PREFIX",
         "start": one_day_ago,
         "end": now,
         "dataColumns": ["duration", "elementCount"],
@@ -714,7 +714,7 @@ def get_performance_hits(page_name: str) -> str:
     global now, one_day_ago
 
     payload = {
-        "site": "ADD_PREFIX",
+        "site": "SITE_PREFIX",
         "start": one_day_ago,
         "end": now,
         "dataType": "rum",
@@ -744,7 +744,7 @@ def get_performance_hits(page_name: str) -> str:
 def get_latest_revenue_date():
     """Helper to find the latest revenue date if needed."""
     data = fetch_data(ENDPOINTS["revenue_report"], method="GET", params={
-        "prefix": "ADD_PREFIX",
+        "prefix": "SITE_PREFIX",
         "salesType": "revenue",
         "latest": "true"
     })
@@ -764,7 +764,7 @@ def get_latest_revenue_opportunity_date():
     Endpoint: /revenue-opportunity/report-date
     """
     params = {
-        "prefix": "ADD_PREFIX",
+        "prefix": "SITE_PREFIX",
         "salesType": "revenue",  # or "brand" if using the Brand Opportunity endpoint
         "latest": "true"
     }
@@ -788,7 +788,7 @@ def get_revenue_opportunity(page_name: str = None, device: list = None) -> str:
         return "> ⚠️ No Revenue Opportunity report found.\n"
 
     params = {
-        "prefix": "ADD_PREFIX",
+        "prefix": "SITE_PREFIX",
         "salesType": "revenue",
         "reportDate": report_date,
     }
@@ -858,7 +858,7 @@ def get_page_revenue(page_name: str) -> str:
         return f"> ⚠️ No revenue data found for **{page_name}**.\n"
 
     params = {
-        "prefix": "ADD_PREFIX",
+        "prefix": "SITE_PREFIX",
         "salesType": "revenue",
         "reportDate": report_date,
         "pageName[]": [page_name]
