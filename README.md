@@ -14,6 +14,9 @@ A powerful Python CLI that connects to the [Blue Triangle API](https://help.blue
 - Supports top N pages by page views
 - Outputs detailed reports in clean Markdown format
 
+### Sample Report Screenshot 
+<img width="747" alt="Sample Report Screenshot" src="https://github.com/user-attachments/assets/b792bd2c-150b-455c-abfc-0c19f9cfd24c" />
+
 ---
 
 ## 🧰 Requirements
