@@ -30,7 +30,7 @@ A powerful Python CLI that connects to the [Blue Triangle API](https://help.blue
 git clone https://github.com/konfirmed/bluetriangle-cli-reporter.git
 cd bluetriangle-cli-reporter
 pip install -r requirements.txt
-python script.py --page pdp checkout --time-range 7d --output report.md
+python bt_insights.py --page pdp checkout --time-range 7d --output report.md
 ```
 
 ---
@@ -52,13 +52,13 @@ SITE_PREFIX = "your_site_prefix"
 Run the CLI with your desired flags:
 
 ```bash
-python script.py [OPTIONS]
+python bt_insights.py [OPTIONS]
 ```
 
 ### 🧪 Example
 
 ```bash
-python script.py --page pdp checkout --time-range 7d
+python bt_insights.py --page pdp checkout --time-range 7d
 ```
 
 Generates a performance report for the PDP and Checkout pages over the last 7 days.
@@ -68,11 +68,11 @@ Generates a performance report for the PDP and Checkout pages over the last 7 da
 ## 🆘 Command-Line Help
 
 ```bash
-python script.py --help
+python bt_insights.py --help
 ```
 
 ```
-usage: script.py [options]
+usage: bt_insights.py [options]
 
 Options:
   --page            One or more page names to analyze
