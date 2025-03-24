@@ -128,7 +128,3 @@ Optionally extend to export CSV or HTML in future versions.
 Kanmi Obasa
 
 
-📄 License
-MIT License – Free to use with attribution.
-
-
