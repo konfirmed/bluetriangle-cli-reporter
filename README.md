@@ -87,6 +87,16 @@ Options:
   --multi-range     Run report over multiple ranges (comma-separated)
   --top-pages       Use top 20 pages by views
 ```
+| Flag           | Description                                | Example                      |
+|----------------|--------------------------------------------|------------------------------|
+| `--page`       | One or more page names to analyze          | `--page pdp checkout`        |
+| `--output`     | Output Markdown file name                  | `--output pdp_report.md`     |
+| `--time-range` | Predefined time range for analysis         | `--time-range 28d`           |
+| `--start`      | Custom start time (epoch timestamp)        | `--start 1710796800`         |
+| `--end`        | Custom end time (epoch timestamp)          | `--end 1710883200`           |
+| `--metrics`    | Filter report to show selected metrics     | `--metrics LCP TBT CLS`      |
+| `--multi-range`| Generate reports for multiple time ranges  | `--multi-range 24h,7d,28d`   |
+| `--top-pages`  | Analyze top 20 pages by page views         | `--top-pages`                |
 
 ---
 
