@@ -31,13 +31,7 @@ ENDPOINTS = {
 }
 
 # You can still define a fallback list in case the API returns no data:
-AVAILABLE_PAGES = ["homepage", "story-women", "story-mens", "story-holiday-gift-guide",
-                   "cdp", "cdp-VT", "cdp-VT-LazyLoad", "search",
-                   "pdp", "pdp-VT", "add-to-bag-cta", 
-                   "My Bag", "My Bag-VT", "mybag-refresh-bag",
-                   "checkout", "checkout-VT",
-                   "account-login", "account-dashboard", "Membership",
-                   ]
+AVAILABLE_PAGES = ["homepage"]
 
 # We'll define these as None, so we can set them after parsing time arguments:
 now = None
