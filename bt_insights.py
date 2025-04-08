@@ -1,3 +1,4 @@
+
 import time
 import re
 import requests
@@ -5,29 +6,36 @@ import pandas as pd
 import argparse
 from difflib import get_close_matches
 import matplotlib.pyplot as plt
+import os
+from dotenv import load_dotenv
 
-# =====================
-# 1) CONFIG & CONSTANTS
-# =====================
+load_dotenv()
+# API Credentials loaded from environment variables
+# BT_API_EMAIL and BT_API_KEY are loaded from .env file
 
-EMAIL = "xxx"
-API_KEY = "xxx"
-
+# Base API URL
 BASE_URL = "https://api.bluetriangletech.com"
+
+# Headers for API Requests
 HEADERS = {
-    "X-API-Email": EMAIL,
-    "X-API-Key": API_KEY,
-    "Content-Type": "application/json"
+    "X-API-Email": os.getenv("BT_API_EMAIL"),
+    "X-API-Key": os.getenv("BT_API_KEY"),
+    "Content-Type": "application/json",
 }
 
+# API Endpoints
 ENDPOINTS = {
     "performance": "/performance",
-    # "performance_hits": "/performance/hits",
+    "performance_hits": "/performance/hits",
+    "synthetic_monitor": "/synthetic-monitor",
     "resource": "/resource",
     "error": "/error",
+    "revenue_opportunity": "/revenue-opportunity",
+    "revenue_opportunity_report": "/revenue-opportunity/report-date",
+    "content_security_policy": "/content-security-policies",
+    "network_health": "/network-health",
+    "network_health_hits": "/network-health/hits",
     "event_markers": "/event-markers",
-    "revenue_report": "/revenue-opportunity/report-date",
-    "revenue": "/revenue-opportunity"
 }
 
 # You can still define a fallback list in case the API returns no data:
