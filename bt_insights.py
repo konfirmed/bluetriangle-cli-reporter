@@ -10,11 +10,16 @@ import logging
 import os
 import pickle
 import re
+import smtplib
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from difflib import get_close_matches
+from email import encoders
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any
 
@@ -512,6 +517,468 @@ def get_threshold_alerts(metrics: dict[str, Any]) -> list[str]:
                 pass
 
     return alerts
+
+
+# ==================
+# NOTIFICATIONS
+# ==================
+
+
+def send_slack_notification(
+    webhook_url: str,
+    report_summary: str,
+    output_file: str | None = None,
+) -> tuple[bool, str]:
+    """Send report notification to Slack via webhook.
+
+    Args:
+        webhook_url: Slack incoming webhook URL.
+        report_summary: Summary text to include in the message.
+        output_file: Optional path to the report file.
+
+    Returns:
+        Tuple of (success, message).
+    """
+    if dry_run_mode:
+        logger.info("[DRY RUN] Would send Slack notification to webhook")
+        return True, "DRY RUN: Slack notification skipped"
+
+    try:
+        # Build Slack message payload
+        blocks = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": "📊 Blue Triangle Performance Report",
+                    "emoji": True
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": report_summary
+                }
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                    }
+                ]
+            }
+        ]
+
+        if output_file:
+            blocks.append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"📎 Report saved to: `{output_file}`"
+                }
+            })
+
+        payload = {"blocks": blocks}
+
+        response = requests.post(
+            webhook_url,
+            json=payload,
+            timeout=30
+        )
+
+        if response.status_code == 200:
+            return True, "Slack notification sent successfully"
+        else:
+            return False, f"Slack returned status {response.status_code}: {response.text[:200]}"
+
+    except requests.exceptions.Timeout:
+        return False, "Slack webhook timed out"
+    except requests.exceptions.RequestException as e:
+        return False, f"Slack notification failed: {str(e)}"
+
+
+def send_teams_notification(
+    webhook_url: str,
+    report_summary: str,
+    output_file: str | None = None,
+) -> tuple[bool, str]:
+    """Send report notification to Microsoft Teams via webhook.
+
+    Args:
+        webhook_url: Teams incoming webhook URL.
+        report_summary: Summary text to include in the message.
+        output_file: Optional path to the report file.
+
+    Returns:
+        Tuple of (success, message).
+    """
+    if dry_run_mode:
+        logger.info("[DRY RUN] Would send Teams notification to webhook")
+        return True, "DRY RUN: Teams notification skipped"
+
+    try:
+        # Build Teams Adaptive Card payload
+        card = {
+            "@type": "MessageCard",
+            "@context": "http://schema.org/extensions",
+            "themeColor": "0076D7",
+            "summary": "Blue Triangle Performance Report",
+            "sections": [
+                {
+                    "activityTitle": "📊 Blue Triangle Performance Report",
+                    "activitySubtitle": f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                    "text": report_summary,
+                    "markdown": True
+                }
+            ]
+        }
+
+        if output_file:
+            card["sections"].append({
+                "text": f"📎 Report saved to: `{output_file}`",
+                "markdown": True
+            })
+
+        response = requests.post(
+            webhook_url,
+            json=card,
+            headers={"Content-Type": "application/json"},
+            timeout=30
+        )
+
+        if response.status_code == 200:
+            return True, "Teams notification sent successfully"
+        else:
+            return False, f"Teams returned status {response.status_code}: {response.text[:200]}"
+
+    except requests.exceptions.Timeout:
+        return False, "Teams webhook timed out"
+    except requests.exceptions.RequestException as e:
+        return False, f"Teams notification failed: {str(e)}"
+
+
+def send_email_notification(
+    smtp_server: str,
+    smtp_port: int,
+    sender_email: str,
+    sender_password: str,
+    recipient_emails: list[str],
+    subject: str,
+    report_summary: str,
+    attachment_path: str | None = None,
+    use_tls: bool = True,
+) -> tuple[bool, str]:
+    """Send report notification via email.
+
+    Args:
+        smtp_server: SMTP server hostname.
+        smtp_port: SMTP server port.
+        sender_email: Sender email address.
+        sender_password: Sender email password or app password.
+        recipient_emails: List of recipient email addresses.
+        subject: Email subject line.
+        report_summary: Report summary for email body.
+        attachment_path: Optional path to file to attach.
+        use_tls: Whether to use TLS encryption (default: True).
+
+    Returns:
+        Tuple of (success, message).
+    """
+    if dry_run_mode:
+        logger.info("[DRY RUN] Would send email to %s", ", ".join(recipient_emails))
+        return True, "DRY RUN: Email notification skipped"
+
+    try:
+        # Create message
+        msg = MIMEMultipart()
+        msg["From"] = sender_email
+        msg["To"] = ", ".join(recipient_emails)
+        msg["Subject"] = subject
+
+        # HTML body
+        html_body = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; line-height: 1.6; }}
+                .header {{ background: #0076D7; color: white; padding: 20px; }}
+                .content {{ padding: 20px; }}
+                .footer {{ background: #f5f5f5; padding: 10px; font-size: 12px; color: #666; }}
+                pre {{ background: #f5f5f5; padding: 10px; overflow-x: auto; }}
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <h1>📊 Blue Triangle Performance Report</h1>
+            </div>
+            <div class="content">
+                <pre>{report_summary}</pre>
+            </div>
+            <div class="footer">
+                Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} by Blue Triangle CLI Reporter
+            </div>
+        </body>
+        </html>
+        """
+
+        msg.attach(MIMEText(html_body, "html"))
+
+        # Attach file if provided
+        if attachment_path and Path(attachment_path).exists():
+            with open(attachment_path, "rb") as f:
+                part = MIMEBase("application", "octet-stream")
+                part.set_payload(f.read())
+                encoders.encode_base64(part)
+                part.add_header(
+                    "Content-Disposition",
+                    f"attachment; filename={Path(attachment_path).name}"
+                )
+                msg.attach(part)
+
+        # Connect and send
+        if use_tls:
+            server = smtplib.SMTP(smtp_server, smtp_port)
+            server.starttls()
+        else:
+            server = smtplib.SMTP_SSL(smtp_server, smtp_port)
+
+        server.login(sender_email, sender_password)
+        server.sendmail(sender_email, recipient_emails, msg.as_string())
+        server.quit()
+
+        return True, f"Email sent successfully to {len(recipient_emails)} recipient(s)"
+
+    except smtplib.SMTPAuthenticationError:
+        return False, "Email authentication failed - check credentials"
+    except smtplib.SMTPException as e:
+        return False, f"SMTP error: {str(e)}"
+    except Exception as e:
+        return False, f"Email notification failed: {str(e)}"
+
+
+def generate_report_summary(
+    data_rows: list[dict[str, Any]],
+    pages_count: int,
+    time_range: str,
+) -> str:
+    """Generate a text summary of the report for notifications.
+
+    Args:
+        data_rows: List of metric data rows.
+        pages_count: Number of pages analyzed.
+        time_range: Time range string.
+
+    Returns:
+        Summary text string.
+    """
+    if not data_rows:
+        return f"Report generated for {pages_count} pages over {time_range}. No data available."
+
+    summary_lines = [
+        f"*Report Summary* ({time_range})",
+        f"• Pages analyzed: {pages_count}",
+        f"• Data rows: {len(data_rows)}",
+        "",
+        "*Key Metrics:*"
+    ]
+
+    # Calculate averages for key metrics
+    lcp_values = [r.get("lcp_curr") for r in data_rows if r.get("lcp_curr")]
+    inp_values = [r.get("inp_curr") for r in data_rows if r.get("inp_curr")]
+    cls_values = [r.get("cls_curr") for r in data_rows if r.get("cls_curr")]
+
+    if lcp_values:
+        avg_lcp = sum(lcp_values) / len(lcp_values)
+        summary_lines.append(f"• Avg LCP: {avg_lcp:.0f}ms")
+
+    if inp_values:
+        avg_inp = sum(inp_values) / len(inp_values)
+        summary_lines.append(f"• Avg INP: {avg_inp:.0f}ms")
+
+    if cls_values:
+        avg_cls = sum(cls_values) / len(cls_values)
+        summary_lines.append(f"• Avg CLS: {avg_cls:.3f}")
+
+    # Add alerts if any metrics are poor
+    alerts = []
+    for row in data_rows:
+        row_alerts = get_threshold_alerts(row)
+        alerts.extend(row_alerts)
+
+    if alerts:
+        summary_lines.append("")
+        summary_lines.append(f"*⚠️ {len(alerts)} threshold alert(s) detected*")
+
+    return "\n".join(summary_lines)
+
+
+# ==================
+# PDF EXPORT
+# ==================
+
+
+def export_to_pdf(
+    data: list[dict[str, Any]],
+    markdown_content: str,
+    output_file: str,
+) -> None:
+    """Export report as PDF with charts.
+
+    Args:
+        data: List of metric dictionaries.
+        markdown_content: Markdown report content.
+        output_file: Output file path.
+    """
+    if not output_file.endswith(".pdf"):
+        output_file = output_file.rsplit(".", 1)[0] + ".pdf"
+
+    # Use matplotlib for PDF generation
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    with PdfPages(output_file) as pdf:
+        # Title page
+        fig, ax = plt.subplots(figsize=(11, 8.5))
+        ax.axis("off")
+        ax.text(
+            0.5, 0.7,
+            "Blue Triangle Performance Report",
+            ha="center", va="center",
+            fontsize=24, fontweight="bold"
+        )
+        ax.text(
+            0.5, 0.5,
+            f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            ha="center", va="center",
+            fontsize=14
+        )
+        ax.text(
+            0.5, 0.4,
+            f"Pages analyzed: {len(data)}",
+            ha="center", va="center",
+            fontsize=12
+        )
+        pdf.savefig(fig, bbox_inches="tight")
+        plt.close(fig)
+
+        if not data:
+            return
+
+        # Metrics comparison chart
+        pages = [row.get("page", "Unknown")[:15] for row in data]
+        lcp_curr = [row.get("lcp_curr", 0) or 0 for row in data]
+        lcp_prev = [row.get("lcp_prev", 0) or 0 for row in data]
+
+        if any(lcp_curr) or any(lcp_prev):
+            fig, ax = plt.subplots(figsize=(11, 8.5))
+            x = range(len(pages))
+            width = 0.35
+
+            ax.bar([i - width/2 for i in x], lcp_curr, width, label="Current", color="#4CAF50")
+            ax.bar([i + width/2 for i in x], lcp_prev, width, label="Previous", color="#2196F3")
+
+            ax.set_xlabel("Page")
+            ax.set_ylabel("LCP (ms)")
+            ax.set_title("Largest Contentful Paint (LCP) by Page")
+            ax.set_xticks(list(x))
+            ax.set_xticklabels(pages, rotation=45, ha="right")
+            ax.legend()
+            ax.axhline(y=2500, color="orange", linestyle="--", label="Good threshold")
+            ax.axhline(y=4000, color="red", linestyle="--", label="Poor threshold")
+
+            plt.tight_layout()
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+
+        # INP chart
+        inp_curr = [row.get("inp_curr", 0) or 0 for row in data]
+        inp_prev = [row.get("inp_prev", 0) or 0 for row in data]
+
+        if any(inp_curr) or any(inp_prev):
+            fig, ax = plt.subplots(figsize=(11, 8.5))
+            x = range(len(pages))
+
+            ax.bar([i - width/2 for i in x], inp_curr, width, label="Current", color="#4CAF50")
+            ax.bar([i + width/2 for i in x], inp_prev, width, label="Previous", color="#2196F3")
+
+            ax.set_xlabel("Page")
+            ax.set_ylabel("INP (ms)")
+            ax.set_title("Interaction to Next Paint (INP) by Page")
+            ax.set_xticks(list(x))
+            ax.set_xticklabels(pages, rotation=45, ha="right")
+            ax.legend()
+            ax.axhline(y=200, color="orange", linestyle="--", label="Good threshold")
+            ax.axhline(y=500, color="red", linestyle="--", label="Poor threshold")
+
+            plt.tight_layout()
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+
+        # CLS chart
+        cls_curr = [(row.get("cls_curr", 0) or 0) for row in data]
+        cls_prev = [(row.get("cls_prev", 0) or 0) for row in data]
+
+        if any(cls_curr) or any(cls_prev):
+            fig, ax = plt.subplots(figsize=(11, 8.5))
+            x = range(len(pages))
+
+            ax.bar([i - width/2 for i in x], cls_curr, width, label="Current", color="#4CAF50")
+            ax.bar([i + width/2 for i in x], cls_prev, width, label="Previous", color="#2196F3")
+
+            ax.set_xlabel("Page")
+            ax.set_ylabel("CLS Score")
+            ax.set_title("Cumulative Layout Shift (CLS) by Page")
+            ax.set_xticks(list(x))
+            ax.set_xticklabels(pages, rotation=45, ha="right")
+            ax.legend()
+            ax.axhline(y=0.1, color="orange", linestyle="--", label="Good threshold")
+            ax.axhline(y=0.25, color="red", linestyle="--", label="Poor threshold")
+
+            plt.tight_layout()
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+
+        # Summary table page
+        fig, ax = plt.subplots(figsize=(11, 8.5))
+        ax.axis("off")
+
+        # Create table data
+        table_data = []
+        headers = ["Page", "LCP (ms)", "INP (ms)", "CLS", "TBT (ms)"]
+
+        for row in data[:20]:  # Limit to 20 rows for readability
+            table_data.append([
+                str(row.get("page", ""))[:20],
+                str(int(row.get("lcp_curr", 0) or 0)),
+                str(int(row.get("inp_curr", 0) or 0)),
+                f"{(row.get('cls_curr', 0) or 0):.3f}",
+                str(int(row.get("tbt_curr", 0) or 0)),
+            ])
+
+        if table_data:
+            table = ax.table(
+                cellText=table_data,
+                colLabels=headers,
+                loc="center",
+                cellLoc="center"
+            )
+            table.auto_set_font_size(False)
+            table.set_fontsize(9)
+            table.scale(1.2, 1.5)
+
+            # Style header
+            for i in range(len(headers)):
+                table[(0, i)].set_facecolor("#0076D7")
+                table[(0, i)].set_text_props(color="white", fontweight="bold")
+
+            ax.set_title("Performance Metrics Summary", fontsize=14, fontweight="bold", pad=20)
+
+        pdf.savefig(fig, bbox_inches="tight")
+        plt.close(fig)
+
+    logger.info("PDF report saved to %s", output_file)
 
 
 # ==================
@@ -2418,7 +2885,7 @@ Environment Variables:
     )
     output_group.add_argument(
         "--format", "-f",
-        choices=["markdown", "json", "csv", "html"],
+        choices=["markdown", "json", "csv", "html", "pdf"],
         default="markdown",
         help="Output format (default: markdown)",
     )
@@ -2427,6 +2894,35 @@ Environment Variables:
         nargs="+",
         choices=["LCP", "TBT", "CLS", "INP", "FB"],
         help="Filter report to specific metrics",
+    )
+
+    # Notification options
+    notify_group = parser.add_argument_group("Notification Options")
+    notify_group.add_argument(
+        "--slack-webhook",
+        type=str,
+        help="Slack incoming webhook URL for notifications",
+    )
+    notify_group.add_argument(
+        "--teams-webhook",
+        type=str,
+        help="Microsoft Teams incoming webhook URL for notifications",
+    )
+    notify_group.add_argument(
+        "--email-to",
+        nargs="+",
+        help="Email recipient(s) for report notification",
+    )
+    notify_group.add_argument(
+        "--email-subject",
+        type=str,
+        default="Blue Triangle Performance Report",
+        help="Email subject line (default: Blue Triangle Performance Report)",
+    )
+    notify_group.add_argument(
+        "--email-attach",
+        action="store_true",
+        help="Attach report file to email notification",
     )
 
     # Advanced options
@@ -2507,7 +3003,7 @@ _bt_insights_completions() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    opts="--page --top-pages --time-range --start --end --multi-range --compare --output --format --metrics --config --cache --clear-cache --alerts --generate-completion --test-connection --no-color --quiet --verbose --dry-run --help"
+    opts="--page --top-pages --time-range --start --end --multi-range --compare --output --format --metrics --slack-webhook --teams-webhook --email-to --email-subject --email-attach --config --cache --clear-cache --alerts --generate-completion --test-connection --no-color --quiet --verbose --dry-run --help"
 
     case "${prev}" in
         --time-range)
@@ -2515,7 +3011,7 @@ _bt_insights_completions() {
             return 0
             ;;
         --format|-f)
-            COMPREPLY=( $(compgen -W "markdown json csv html" -- ${cur}) )
+            COMPREPLY=( $(compgen -W "markdown json csv html pdf" -- ${cur}) )
             return 0
             ;;
         --metrics)
@@ -2528,6 +3024,9 @@ _bt_insights_completions() {
             ;;
         --output|-o|--config)
             COMPREPLY=( $(compgen -f -- ${cur}) )
+            return 0
+            ;;
+        --slack-webhook|--teams-webhook|--email-to|--email-subject)
             return 0
             ;;
     esac
@@ -2552,7 +3051,7 @@ _bt_insights() {
     local -a opts time_ranges formats metrics shells
 
     time_ranges=(qd hd 24h xd 2d 6d 7d 28d 30d 90d 1y 2y 3y)
-    formats=(markdown json csv html)
+    formats=(markdown json csv html pdf)
     metrics=(LCP TBT CLS INP FB)
     shells=(bash zsh)
 
@@ -2567,6 +3066,11 @@ _bt_insights() {
         {-o,--output}'[Output filename]:file:_files' \\
         {-f,--format}'[Output format]:format:($formats)' \\
         '--metrics[Filter metrics]:metrics:($metrics)' \\
+        '--slack-webhook[Slack webhook URL]:url:' \\
+        '--teams-webhook[Teams webhook URL]:url:' \\
+        '--email-to[Email recipients]:emails:' \\
+        '--email-subject[Email subject]:subject:' \\
+        '--email-attach[Attach report to email]' \\
         '--config[Config file path]:file:_files -g "*.yaml *.yml"' \\
         '--cache[Enable caching]' \\
         '--clear-cache[Clear cache]' \\
@@ -2576,6 +3080,7 @@ _bt_insights() {
         '--no-color[Disable colors]' \\
         {-q,--quiet}'[Suppress progress]' \\
         {-v,--verbose}'[Enable debug logging]' \\
+        '--dry-run[Preview without API calls]' \\
         '--help[Show help]'
 }
 
@@ -2810,6 +3315,10 @@ def main() -> None:
             if not output_file.endswith(".html"):
                 output_file = output_file.rsplit(".", 1)[0] + ".html"
             export_to_html(data_rows, final_md, output_file)
+        elif output_format == "pdf":
+            if not output_file.endswith(".pdf"):
+                output_file = output_file.rsplit(".", 1)[0] + ".pdf"
+            export_to_pdf(data_rows, final_md, output_file)
         else:  # markdown
             with open(output_file, "w", encoding="utf-8") as f:
                 f.write(final_md)
@@ -2826,6 +3335,62 @@ def main() -> None:
             )
         else:
             print_success(f"Report saved to '{output_file}'")
+
+        # Send notifications if configured
+        time_range_str = args.time_range if not args.compare else "comparison"
+        report_summary = generate_report_summary(data_rows, len(pages), time_range_str)
+
+        # Slack notification
+        if args.slack_webhook:
+            if show_progress:
+                print_info("Sending Slack notification...")
+            success, message = send_slack_notification(
+                args.slack_webhook, report_summary, output_file
+            )
+            if success:
+                print_success(message)
+            else:
+                print_error(message)
+
+        # Teams notification
+        if args.teams_webhook:
+            if show_progress:
+                print_info("Sending Teams notification...")
+            success, message = send_teams_notification(
+                args.teams_webhook, report_summary, output_file
+            )
+            if success:
+                print_success(message)
+            else:
+                print_error(message)
+
+        # Email notification
+        if args.email_to:
+            smtp_server = os.getenv("BT_SMTP_SERVER", "smtp.gmail.com")
+            smtp_port = int(os.getenv("BT_SMTP_PORT", "587"))
+            sender_email = os.getenv("BT_SMTP_EMAIL", "")
+            sender_password = os.getenv("BT_SMTP_PASSWORD", "")
+
+            if not sender_email or not sender_password:
+                print_error("Email notification requires BT_SMTP_EMAIL and BT_SMTP_PASSWORD environment variables")
+            else:
+                if show_progress:
+                    print_info(f"Sending email to {len(args.email_to)} recipient(s)...")
+                attachment = output_file if args.email_attach else None
+                success, message = send_email_notification(
+                    smtp_server=smtp_server,
+                    smtp_port=smtp_port,
+                    sender_email=sender_email,
+                    sender_password=sender_password,
+                    recipient_emails=args.email_to,
+                    subject=args.email_subject,
+                    report_summary=report_summary,
+                    attachment_path=attachment,
+                )
+                if success:
+                    print_success(message)
+                else:
+                    print_error(message)
 
     except KeyboardInterrupt:
         print()

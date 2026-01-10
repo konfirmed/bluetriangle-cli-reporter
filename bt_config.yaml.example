@@ -45,3 +45,21 @@ thresholds:
 
   # Page onload time threshold in ms
   onload: 3000
+
+# Notification Configuration (optional)
+# notifications:
+#   # Slack webhook URL for automatic notifications
+#   slack_webhook: https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+#
+#   # Microsoft Teams webhook URL for automatic notifications
+#   teams_webhook: https://outlook.office.com/webhook/YOUR/WEBHOOK/URL
+#
+#   # Email notification settings
+#   email:
+#     smtp_server: smtp.gmail.com
+#     smtp_port: 587
+#     sender_email: your@email.com
+#     sender_password: your_app_password
+#     recipients:
+#       - recipient1@example.com
+#       - recipient2@example.com

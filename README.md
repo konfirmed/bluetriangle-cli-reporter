@@ -117,6 +117,9 @@ python bt_insights.py --page pdp --format json -o metrics.json
 
 # Export as CSV (for spreadsheets)
 python bt_insights.py --page pdp --format csv -o metrics.csv
+
+# Export as PDF with charts
+python bt_insights.py --page pdp --format pdf -o report.pdf
 ```
 
 ### Multi-Range Reports
@@ -196,6 +199,31 @@ python bt_insights.py --page pdp --verbose
 python bt_insights.py --test-connection
 ```
 
+### Notifications (Slack/Teams/Email)
+
+```bash
+# Send report notification to Slack
+python bt_insights.py --page pdp --slack-webhook https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+
+# Send report notification to Microsoft Teams
+python bt_insights.py --page pdp --teams-webhook https://outlook.office.com/webhook/YOUR/WEBHOOK/URL
+
+# Send report via email (requires SMTP environment variables)
+python bt_insights.py --page pdp --email-to recipient@example.com --email-subject "Weekly Report"
+
+# Attach report file to email
+python bt_insights.py --page pdp --email-to recipient@example.com --email-attach
+
+# Combine multiple notifications
+python bt_insights.py --page pdp --slack-webhook URL --email-to user@example.com
+```
+
+**Email Configuration:** Set these environment variables for email notifications:
+- `BT_SMTP_SERVER` - SMTP server hostname (default: smtp.gmail.com)
+- `BT_SMTP_PORT` - SMTP server port (default: 587)
+- `BT_SMTP_EMAIL` - Sender email address
+- `BT_SMTP_PASSWORD` - Sender email password or app password
+
 ---
 
 ## Command-Line Reference
@@ -225,9 +253,19 @@ python bt_insights.py --help
 | Flag | Description | Example |
 |------|-------------|---------|
 | `--output`, `-o` | Output filename | `-o report.md` |
-| `--format`, `-f` | Output format: markdown, json, csv, html | `--format html` |
+| `--format`, `-f` | Output format: markdown, json, csv, html, pdf | `--format pdf` |
 | `--metrics` | Filter to specific metrics | `--metrics LCP TBT CLS` |
 | `--alerts` | Show threshold alerts for metrics | `--alerts` |
+
+### Notification Options
+
+| Flag | Description | Example |
+|------|-------------|---------|
+| `--slack-webhook` | Slack incoming webhook URL | `--slack-webhook URL` |
+| `--teams-webhook` | Microsoft Teams incoming webhook URL | `--teams-webhook URL` |
+| `--email-to` | Email recipient(s) | `--email-to user@example.com` |
+| `--email-subject` | Email subject line | `--email-subject "Report"` |
+| `--email-attach` | Attach report file to email | `--email-attach` |
 
 ### Caching & Configuration
 
@@ -350,8 +388,8 @@ pytest tests/ -v
 - [x] Add progress bars (tqdm)
 - [x] Add dry-run mode
 - [x] Add input validation
-- [ ] Add Slack/email integration for auto-sharing
-- [ ] Add PDF export option
+- [x] Add Slack/Teams/email integration for auto-sharing
+- [x] Add PDF export option
 
 ---
 
