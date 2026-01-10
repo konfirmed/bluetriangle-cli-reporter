@@ -412,5 +412,272 @@ class TestSaveReport:
         assert test_file.read_text() == content
 
 
+class TestRetryLogic:
+    """Tests for API retry logic."""
+
+    @patch("bt_insights.requests.get")
+    @patch("bt_insights.time.sleep")
+    def test_fetch_data_retries_on_timeout(self, mock_sleep, mock_get):
+        """Test that fetch_data retries on timeout."""
+        import requests
+
+        # Fail twice, succeed on third try
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"data": "success"}
+        mock_response.raise_for_status = MagicMock()
+
+        mock_get.side_effect = [
+            requests.exceptions.Timeout(),
+            requests.exceptions.Timeout(),
+            mock_response,
+        ]
+
+        result = bt_insights.fetch_data("/test", method="GET", use_cache=False)
+
+        assert result == {"data": "success"}
+        assert mock_get.call_count == 3
+        assert mock_sleep.call_count == 2
+
+    @patch("bt_insights.requests.get")
+    @patch("bt_insights.time.sleep")
+    def test_fetch_data_retries_on_500_error(self, mock_sleep, mock_get):
+        """Test that fetch_data retries on 500 errors."""
+        # First call returns 503, second succeeds
+        mock_error_response = MagicMock()
+        mock_error_response.status_code = 503
+
+        mock_success_response = MagicMock()
+        mock_success_response.status_code = 200
+        mock_success_response.json.return_value = {"data": "success"}
+        mock_success_response.raise_for_status = MagicMock()
+
+        mock_get.side_effect = [mock_error_response, mock_success_response]
+
+        result = bt_insights.fetch_data("/test", method="GET", use_cache=False)
+
+        assert result == {"data": "success"}
+        assert mock_get.call_count == 2
+
+    @patch("bt_insights.requests.get")
+    def test_fetch_data_no_retry_on_404(self, mock_get):
+        """Test that 404 errors are not retried."""
+        import requests
+
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError()
+        mock_get.return_value = mock_response
+
+        result = bt_insights.fetch_data("/test", method="GET", use_cache=False)
+
+        assert result is None
+        assert mock_get.call_count == 1  # No retries
+
+
+class TestCaching:
+    """Tests for API response caching."""
+
+    def test_get_cache_key_deterministic(self):
+        """Test that cache keys are deterministic."""
+        key1 = bt_insights.get_cache_key("/test", {"a": 1, "b": 2})
+        key2 = bt_insights.get_cache_key("/test", {"b": 2, "a": 1})
+        key3 = bt_insights.get_cache_key("/test", {"a": 1, "b": 3})
+
+        # Same data should produce same key
+        assert key1 == key2
+        # Different data should produce different key
+        assert key1 != key3
+
+    def test_get_cache_key_none_payload(self):
+        """Test cache key with None payload."""
+        key = bt_insights.get_cache_key("/test", None)
+        assert isinstance(key, str)
+        assert len(key) == 32  # MD5 hash length
+
+    def test_cache_disabled_returns_none(self):
+        """Test that cache returns None when disabled."""
+        original = bt_insights.cache_enabled
+        bt_insights.cache_enabled = False
+
+        result = bt_insights.get_cached_response("any_key")
+        assert result is None
+
+        bt_insights.cache_enabled = original
+
+    def test_clear_cache_returns_count(self, tmp_path):
+        """Test that clear_cache returns count of deleted files."""
+        # This tests the function signature
+        count = bt_insights.clear_cache()
+        assert isinstance(count, int)
+        assert count >= 0
+
+
+class TestThresholds:
+    """Tests for threshold alerting."""
+
+    def test_check_threshold_good_value(self):
+        """Test threshold check with good value."""
+        status, alert = bt_insights.check_threshold("LCP", 2000)
+        assert status == "good"
+        assert alert is None
+
+    def test_check_threshold_needs_improvement(self):
+        """Test threshold check with needs-improvement value."""
+        status, alert = bt_insights.check_threshold("LCP", 3000)
+        assert status == "needs-improvement"
+        assert alert is not None
+        assert "needs improvement" in alert
+
+    def test_check_threshold_poor_value(self):
+        """Test threshold check with poor value."""
+        status, alert = bt_insights.check_threshold("LCP", 5000)
+        assert status == "poor"
+        assert alert is not None
+        assert "POOR" in alert
+
+    def test_check_threshold_unknown_metric(self):
+        """Test threshold check with unknown metric."""
+        status, alert = bt_insights.check_threshold("UNKNOWN", 1000)
+        assert status == "unknown"
+        assert alert is None
+
+    def test_check_threshold_none_value(self):
+        """Test threshold check with None value."""
+        status, alert = bt_insights.check_threshold("LCP", None)
+        assert status == "unknown"
+        assert alert is None
+
+    def test_get_threshold_alerts(self):
+        """Test getting all alerts for metrics."""
+        metrics = {
+            "largestContentfulPaint": 5000,  # Poor
+            "intToNextPaint": 100,  # Good
+        }
+        alerts = bt_insights.get_threshold_alerts(metrics)
+        assert len(alerts) == 1
+        assert "LCP" in alerts[0]
+
+
+class TestHTMLExport:
+    """Tests for HTML export functionality."""
+
+    def test_export_to_html_creates_file(self, tmp_path):
+        """Test that HTML export creates a file."""
+        output_file = str(tmp_path / "test_report.html")
+        data = [
+            {
+                "page": "homepage",
+                "lcp_curr": 2000,
+                "lcp_prev": 2500,
+                "inp_curr": 100,
+                "inp_prev": 150,
+                "cls_curr": 0.1,
+                "cls_prev": 0.15,
+                "tbt_curr": 200,
+                "tbt_prev": 250,
+            }
+        ]
+        markdown = "# Test Report"
+
+        bt_insights.export_to_html(data, markdown, output_file)
+
+        assert (tmp_path / "test_report.html").exists()
+
+    def test_export_to_html_contains_chart_js(self, tmp_path):
+        """Test that HTML export contains Chart.js."""
+        output_file = str(tmp_path / "test_report.html")
+        data = [{"page": "test", "lcp_curr": 1000, "lcp_prev": 1000,
+                 "inp_curr": 100, "inp_prev": 100, "cls_curr": 0.1,
+                 "cls_prev": 0.1, "tbt_curr": 100, "tbt_prev": 100}]
+
+        bt_insights.export_to_html(data, "# Test", output_file)
+
+        content = (tmp_path / "test_report.html").read_text()
+        assert "chart.js" in content.lower()
+        assert "chartData" in content
+
+    def test_export_to_html_adds_extension(self, tmp_path):
+        """Test that .html extension is added if missing."""
+        output_file = str(tmp_path / "test_report.md")
+        data = [{"page": "test", "lcp_curr": 1000, "lcp_prev": 1000,
+                 "inp_curr": 100, "inp_prev": 100, "cls_curr": 0.1,
+                 "cls_prev": 0.1, "tbt_curr": 100, "tbt_prev": 100}]
+
+        bt_insights.export_to_html(data, "# Test", output_file)
+
+        # Should create .html file, not .md
+        assert (tmp_path / "test_report.html").exists()
+
+
+class TestConcurrency:
+    """Tests for concurrent processing."""
+
+    def test_max_workers_defined(self):
+        """Test that MAX_WORKERS constant is defined."""
+        assert hasattr(bt_insights, "MAX_WORKERS")
+        assert bt_insights.MAX_WORKERS > 0
+        assert bt_insights.MAX_WORKERS <= 10
+
+    def test_generate_full_report_signature(self):
+        """Test that generate_full_report accepts concurrency parameter."""
+        import inspect
+        sig = inspect.signature(bt_insights.generate_full_report)
+        params = list(sig.parameters.keys())
+        assert "use_concurrency" in params
+
+
+class TestCredentialValidation:
+    """Tests for credential validation."""
+
+    def test_validate_credentials_missing_all(self):
+        """Test validation when all credentials are missing."""
+        # Save original values
+        orig_email = bt_insights.HEADERS.get("X-API-Email")
+        orig_key = bt_insights.HEADERS.get("X-API-Key")
+
+        # Clear credentials
+        bt_insights.HEADERS["X-API-Email"] = ""
+        bt_insights.HEADERS["X-API-Key"] = ""
+
+        is_valid, missing = bt_insights.validate_credentials()
+
+        # Restore
+        if orig_email:
+            bt_insights.HEADERS["X-API-Email"] = orig_email
+        if orig_key:
+            bt_insights.HEADERS["X-API-Key"] = orig_key
+
+        assert is_valid is False
+        assert len(missing) > 0
+
+
+class TestColorOutput:
+    """Tests for colored output functionality."""
+
+    def test_colors_class_exists(self):
+        """Test that Colors class exists with expected attributes."""
+        assert hasattr(bt_insights, "Colors")
+        assert hasattr(bt_insights.Colors, "GREEN")
+        assert hasattr(bt_insights.Colors, "RED")
+        assert hasattr(bt_insights.Colors, "RESET")
+
+    def test_colors_disable_sets_flag(self):
+        """Test that disable() sets _enabled to False."""
+        bt_insights.Colors.enable()
+        assert bt_insights.Colors._enabled is True
+
+        bt_insights.Colors.disable()
+        assert bt_insights.Colors._enabled is False
+
+        # Re-enable for other tests
+        bt_insights.Colors.enable()
+        assert bt_insights.Colors._enabled is True
+
+    def test_colors_wrap_method_exists(self):
+        """Test that _wrap method exists for conditional coloring."""
+        assert hasattr(bt_insights.Colors, "_wrap")
+        assert callable(bt_insights.Colors._wrap)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

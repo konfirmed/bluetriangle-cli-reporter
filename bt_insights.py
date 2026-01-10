@@ -12,6 +12,7 @@ import pickle
 import re
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from difflib import get_close_matches
 from pathlib import Path
@@ -629,6 +630,12 @@ def validate_api_response(
     return True
 
 
+# Retry configuration
+MAX_RETRIES = 3
+RETRY_BACKOFF_BASE = 2  # seconds
+RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+
+
 def fetch_data(
     endpoint: str,
     payload: dict[str, Any] | None = None,
@@ -636,7 +643,9 @@ def fetch_data(
     params: dict[str, Any] | None = None,
     use_cache: bool = True,
 ) -> dict[str, Any] | list[Any] | None:
-    """Generic function to fetch JSON from the Blue Triangle API.
+    """Generic function to fetch JSON from the Blue Triangle API with retry logic.
+
+    Implements exponential backoff for transient failures (timeouts, 5xx errors).
 
     Args:
         endpoint: API endpoint path.
@@ -658,33 +667,69 @@ def fetch_data(
             return cached
 
     url = BASE_URL + endpoint
-    try:
-        if method == "GET":
-            logger.debug("GET %s params=%s", url, params)
-            r = requests.get(
-                url, headers=HEADERS, params=params, timeout=REQUEST_TIMEOUT
-            )
-        else:
-            logger.debug("POST %s payload=%s", url, payload)
-            r = requests.post(
-                url, headers=HEADERS, json=payload, timeout=REQUEST_TIMEOUT
-            )
-        r.raise_for_status()
-        data = r.json()
 
-        # Cache successful response
-        if use_cache and data is not None:
-            set_cached_response(cache_key, data)
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            if method == "GET":
+                logger.debug("GET %s params=%s (attempt %d)", url, params, attempt + 1)
+                r = requests.get(
+                    url, headers=HEADERS, params=params, timeout=REQUEST_TIMEOUT
+                )
+            else:
+                logger.debug("POST %s payload=%s (attempt %d)", url, payload, attempt + 1)
+                r = requests.post(
+                    url, headers=HEADERS, json=payload, timeout=REQUEST_TIMEOUT
+                )
 
-        return data
-    except requests.exceptions.HTTPError as errh:
-        logger.error("HTTP Error: %s", errh)
-    except requests.exceptions.ConnectionError as errc:
-        logger.error("Connection Error: %s", errc)
-    except requests.exceptions.Timeout as errt:
-        logger.error("Timeout Error: %s", errt)
-    except requests.exceptions.RequestException as err:
-        logger.error("Request Error: %s", err)
+            # Check for retryable status codes
+            if r.status_code in RETRYABLE_STATUS_CODES and attempt < MAX_RETRIES:
+                wait_time = RETRY_BACKOFF_BASE ** attempt
+                logger.warning(
+                    "Retryable status %d, waiting %.1fs before retry %d/%d",
+                    r.status_code, wait_time, attempt + 1, MAX_RETRIES
+                )
+                time.sleep(wait_time)
+                continue
+
+            r.raise_for_status()
+            data = r.json()
+
+            # Cache successful response
+            if use_cache and data is not None:
+                set_cached_response(cache_key, data)
+
+            return data
+
+        except requests.exceptions.Timeout as errt:
+            if attempt < MAX_RETRIES:
+                wait_time = RETRY_BACKOFF_BASE ** attempt
+                logger.warning(
+                    "Timeout, waiting %.1fs before retry %d/%d",
+                    wait_time, attempt + 1, MAX_RETRIES
+                )
+                time.sleep(wait_time)
+                continue
+            logger.error("Timeout Error after %d retries: %s", MAX_RETRIES, errt)
+
+        except requests.exceptions.ConnectionError as errc:
+            if attempt < MAX_RETRIES:
+                wait_time = RETRY_BACKOFF_BASE ** attempt
+                logger.warning(
+                    "Connection error, waiting %.1fs before retry %d/%d",
+                    wait_time, attempt + 1, MAX_RETRIES
+                )
+                time.sleep(wait_time)
+                continue
+            logger.error("Connection Error after %d retries: %s", MAX_RETRIES, errc)
+
+        except requests.exceptions.HTTPError as errh:
+            logger.error("HTTP Error: %s", errh)
+            break  # Don't retry non-retryable HTTP errors
+
+        except requests.exceptions.RequestException as err:
+            logger.error("Request Error: %s", err)
+            break
+
     return None
 
 
@@ -1621,15 +1666,23 @@ def build_page_report(page_name: str) -> str:
     return text
 
 
+# Concurrency configuration
+MAX_WORKERS = 5  # Maximum concurrent API requests
+
+
 def generate_full_report(
     pages: list[str],
     show_progress: bool = True,
+    use_concurrency: bool = True,
 ) -> tuple[str, list[dict[str, Any]]]:
     """Generate complete report for multiple pages.
+
+    Uses concurrent processing for faster multi-page reports.
 
     Args:
         pages: List of page names to analyze.
         show_progress: Whether to show progress indicators.
+        use_concurrency: Whether to use parallel processing.
 
     Returns:
         Tuple of (Markdown formatted report, list of metric rows for export).
@@ -1640,12 +1693,36 @@ def generate_full_report(
     if show_progress:
         print_info(f"Gathering metrics for {total} page(s)...")
 
-    for i, pg in enumerate(pages, 1):
-        if show_progress:
-            print_progress(i, total, pg)
-        row = gather_page_metrics(pg)
-        if row is not None:
-            table_rows.append(row)
+    # Use concurrent processing for multiple pages
+    if use_concurrency and total > 1:
+        completed = 0
+        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, total)) as executor:
+            future_to_page = {
+                executor.submit(gather_page_metrics, pg): pg for pg in pages
+            }
+            for future in as_completed(future_to_page):
+                pg = future_to_page[future]
+                completed += 1
+                if show_progress:
+                    print_progress(completed, total, pg)
+                try:
+                    row = future.result()
+                    if row is not None:
+                        table_rows.append(row)
+                except Exception as e:
+                    logger.error("Error processing page %s: %s", pg, e)
+
+        # Sort rows to maintain page order
+        page_order = {pg: i for i, pg in enumerate(pages)}
+        table_rows.sort(key=lambda r: page_order.get(r.get("page", ""), 999))
+    else:
+        # Sequential processing for single page
+        for i, pg in enumerate(pages, 1):
+            if show_progress:
+                print_progress(i, total, pg)
+            row = gather_page_metrics(pg)
+            if row is not None:
+                table_rows.append(row)
 
     summary_table = make_summary_table(table_rows)
     big_md = "# 🔍 Blue Triangle API Report\n\n"
@@ -1981,6 +2058,8 @@ def compare_time_periods(
 ) -> tuple[str, list[dict[str, Any]]]:
     """Compare metrics between two arbitrary time periods.
 
+    Temporarily modifies global time variables, then restores them.
+
     Args:
         pages: List of page names to analyze.
         period1_start: Start of first period (epoch).
@@ -1994,34 +2073,45 @@ def compare_time_periods(
     """
     global now, one_day_ago, two_days_ago
 
+    # Save original global state to restore later
+    original_now = now
+    original_one_day_ago = one_day_ago
+    original_two_days_ago = two_days_ago
+
     comparison_data = []
 
-    if show_progress:
-        print_info("Fetching Period 1 data...")
+    try:
+        if show_progress:
+            print_info("Fetching Period 1 data...")
 
-    # Fetch period 1 data
-    now = period1_end
-    one_day_ago = period1_start
-    two_days_ago = None
+        # Fetch period 1 data
+        now = period1_end
+        one_day_ago = period1_start
+        two_days_ago = None
 
-    period1_metrics = {}
-    for pg in pages:
-        row = gather_page_metrics(pg)
-        if row:
-            period1_metrics[pg] = row
+        period1_metrics = {}
+        for pg in pages:
+            row = gather_page_metrics(pg)
+            if row:
+                period1_metrics[pg] = row
 
-    if show_progress:
-        print_info("Fetching Period 2 data...")
+        if show_progress:
+            print_info("Fetching Period 2 data...")
 
-    # Fetch period 2 data
-    now = period2_end
-    one_day_ago = period2_start
+        # Fetch period 2 data
+        now = period2_end
+        one_day_ago = period2_start
 
-    period2_metrics = {}
-    for pg in pages:
-        row = gather_page_metrics(pg)
-        if row:
-            period2_metrics[pg] = row
+        period2_metrics = {}
+        for pg in pages:
+            row = gather_page_metrics(pg)
+            if row:
+                period2_metrics[pg] = row
+    finally:
+        # Always restore original global state
+        now = original_now
+        one_day_ago = original_one_day_ago
+        two_days_ago = original_two_days_ago
 
     # Build comparison report
     p1_start_str = datetime.fromtimestamp(period1_start).strftime('%Y-%m-%d %H:%M')
