@@ -249,6 +249,7 @@ python bt_insights.py --help
 |------|-------------|
 | `--test-connection` | Test API connection and exit |
 | `--generate-completion` | Generate shell completion (bash/zsh) |
+| `--dry-run` | Preview actions without making API calls |
 | `--no-color` | Disable colored output |
 | `--quiet`, `-q` | Suppress progress output |
 | `--verbose`, `-v` | Enable debug logging |
@@ -343,9 +344,14 @@ pytest tests/ -v
 - [x] Add threshold alerting (Web Vitals)
 - [x] Add time period comparison mode
 - [x] Add shell completion scripts (bash/zsh)
+- [x] Add CI/CD pipeline (GitHub Actions)
+- [x] Add retry logic with exponential backoff
+- [x] Add concurrent API requests
+- [x] Add progress bars (tqdm)
+- [x] Add dry-run mode
+- [x] Add input validation
 - [ ] Add Slack/email integration for auto-sharing
 - [ ] Add PDF export option
-- [ ] Add CI/CD pipeline
 
 ---
 

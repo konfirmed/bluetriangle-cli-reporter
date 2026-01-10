@@ -294,16 +294,21 @@ class TestParseTimeArgs:
 
     def test_parse_time_args_custom_range(self):
         """Test parsing custom start/end times."""
+        import time as time_module
+        now = int(time_module.time())
+        test_start = now - 86400 * 7  # 7 days ago
+        test_end = now - 86400  # 1 day ago
+
         args = argparse.Namespace(
             multi_range=None,
-            start=1000000,
-            end=2000000,
+            start=test_start,
+            end=test_end,
             time_range="7d"
         )
         start, end, prev_start, prev_end, multi_list = bt_insights.parse_time_args(args)
 
-        assert start == 1000000
-        assert end == 2000000
+        assert start == test_start
+        assert end == test_end
         assert multi_list == []
 
     def test_parse_time_args_preset_range(self):
@@ -649,6 +654,90 @@ class TestCredentialValidation:
 
         assert is_valid is False
         assert len(missing) > 0
+
+
+class TestInputValidation:
+    """Tests for input validation."""
+
+    def test_validate_epoch_timestamp_valid(self):
+        """Test validation passes for valid timestamps."""
+        import time as time_module
+        now = int(time_module.time())
+        # Should not raise
+        bt_insights.validate_epoch_timestamp(now - 86400, "--start")
+        bt_insights.validate_epoch_timestamp(now, "--end")
+
+    def test_validate_epoch_timestamp_too_old(self):
+        """Test validation fails for timestamps that are too old."""
+        with pytest.raises(ValueError) as exc_info:
+            bt_insights.validate_epoch_timestamp(1000, "--start")
+        assert "too old" in str(exc_info.value)
+
+    def test_validate_epoch_timestamp_future(self):
+        """Test validation fails for future timestamps."""
+        import time as time_module
+        future_ts = int(time_module.time()) + 86400 * 30  # 30 days in future
+        with pytest.raises(ValueError) as exc_info:
+            bt_insights.validate_epoch_timestamp(future_ts, "--end")
+        assert "future" in str(exc_info.value)
+
+    def test_parse_time_args_invalid_range(self):
+        """Test that invalid time ranges are rejected."""
+        args = argparse.Namespace(
+            multi_range="invalid_range",
+            start=None,
+            end=None,
+            time_range="7d"
+        )
+        with pytest.raises(ValueError) as exc_info:
+            bt_insights.parse_time_args(args)
+        assert "Unknown time range" in str(exc_info.value)
+
+    def test_parse_time_args_start_after_end(self):
+        """Test that start after end is rejected."""
+        import time as time_module
+        now = int(time_module.time())
+        args = argparse.Namespace(
+            multi_range=None,
+            start=now,
+            end=now - 86400,  # end before start
+            time_range="7d"
+        )
+        with pytest.raises(ValueError) as exc_info:
+            bt_insights.parse_time_args(args)
+        assert "must be before" in str(exc_info.value)
+
+
+class TestDryRunMode:
+    """Tests for dry run mode."""
+
+    def test_dry_run_flag_exists(self):
+        """Test that dry_run_mode flag exists."""
+        assert hasattr(bt_insights, "dry_run_mode")
+
+    @patch("bt_insights.requests.get")
+    def test_dry_run_skips_api_calls(self, mock_get):
+        """Test that dry run mode doesn't make API calls."""
+        original = bt_insights.dry_run_mode
+        bt_insights.dry_run_mode = True
+
+        result = bt_insights.fetch_data("/test", method="GET")
+
+        bt_insights.dry_run_mode = original
+
+        # Should return mock data, not call API
+        assert result is not None
+        assert result.get("dry_run") is True
+        mock_get.assert_not_called()
+
+
+class TestProgressBars:
+    """Tests for progress bar functionality."""
+
+    def test_tqdm_available_flag_exists(self):
+        """Test that TQDM_AVAILABLE flag exists."""
+        assert hasattr(bt_insights, "TQDM_AVAILABLE")
+        assert isinstance(bt_insights.TQDM_AVAILABLE, bool)
 
 
 class TestColorOutput:

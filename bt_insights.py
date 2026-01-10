@@ -30,6 +30,14 @@ try:
 except ImportError:
     YAML_AVAILABLE = False
 
+# Try to import tqdm for progress bars
+try:
+    from tqdm import tqdm
+    TQDM_AVAILABLE = True
+except ImportError:
+    TQDM_AVAILABLE = False
+    tqdm = None  # type: ignore
+
 load_dotenv()
 
 # Configure logging
@@ -255,6 +263,9 @@ alert_thresholds: dict[str, float] | None = None
 CACHE_DIR = Path.home() / ".bt_cache"
 CACHE_TTL = int(os.getenv("BT_CACHE_TTL", "300"))  # 5 minutes default
 cache_enabled = False
+
+# Dry run mode - preview actions without making API calls
+dry_run_mode = False
 
 
 # ==================
@@ -646,6 +657,7 @@ def fetch_data(
     """Generic function to fetch JSON from the Blue Triangle API with retry logic.
 
     Implements exponential backoff for transient failures (timeouts, 5xx errors).
+    Respects Retry-After headers for rate limiting (429 responses).
 
     Args:
         endpoint: API endpoint path.
@@ -657,6 +669,11 @@ def fetch_data(
     Returns:
         Parsed JSON response or None on error.
     """
+    # Dry run mode - return mock data
+    if dry_run_mode:
+        logger.info("[DRY RUN] Would fetch: %s %s", method, endpoint)
+        return {"dry_run": True, "endpoint": endpoint}
+
     # Check cache first
     cache_data = payload if method == "POST" else params
     cache_key = get_cache_key(endpoint, cache_data)
@@ -681,7 +698,29 @@ def fetch_data(
                     url, headers=HEADERS, json=payload, timeout=REQUEST_TIMEOUT
                 )
 
-            # Check for retryable status codes
+            # Handle rate limiting with Retry-After header
+            if r.status_code == 429:
+                retry_after = r.headers.get("Retry-After")
+                if retry_after:
+                    try:
+                        wait_time = int(retry_after)
+                    except ValueError:
+                        wait_time = RETRY_BACKOFF_BASE ** attempt
+                else:
+                    wait_time = RETRY_BACKOFF_BASE ** attempt
+
+                if attempt < MAX_RETRIES:
+                    logger.warning(
+                        "Rate limited (429), waiting %ds before retry %d/%d",
+                        wait_time, attempt + 1, MAX_RETRIES
+                    )
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    logger.error("Rate limit exceeded after %d retries", MAX_RETRIES)
+                    return None
+
+            # Check for other retryable status codes
             if r.status_code in RETRYABLE_STATUS_CODES and attempt < MAX_RETRIES:
                 wait_time = RETRY_BACKOFF_BASE ** attempt
                 logger.warning(
@@ -825,10 +864,37 @@ def plot_performance_metrics(metrics: dict[str, Any]) -> None:
 # ================
 
 
+def validate_epoch_timestamp(ts: int, name: str) -> None:
+    """Validate an epoch timestamp is reasonable.
+
+    Args:
+        ts: Timestamp to validate.
+        name: Name of the parameter for error messages.
+
+    Raises:
+        ValueError: If timestamp is invalid.
+    """
+    now_ts = int(time.time())
+    min_ts = 1000000000  # Sep 9, 2001 - reasonable minimum
+    max_ts = now_ts + 86400  # 1 day in the future max
+
+    if ts < min_ts:
+        raise ValueError(
+            f"Invalid {name}: {ts} is too old. "
+            f"Expected epoch timestamp (seconds since 1970). "
+            f"Example: {now_ts} for current time."
+        )
+    if ts > max_ts:
+        raise ValueError(
+            f"Invalid {name}: {ts} is in the future. "
+            f"Current time is {now_ts}."
+        )
+
+
 def parse_time_args(
     args: argparse.Namespace,
 ) -> tuple[int | None, int | None, int | None, int | None, list[str]]:
-    """Parse time-related arguments.
+    """Parse time-related arguments with validation.
 
     If --multi-range is provided, returns a list of multiple ranges.
     Otherwise, parse single start/end or a named --time-range.
@@ -838,9 +904,19 @@ def parse_time_args(
 
     Returns:
         Tuple of (start, end, prev_start, prev_end, multi_list).
+
+    Raises:
+        ValueError: If timestamps are invalid.
     """
     if args.multi_range:
         ranges = [x.strip() for x in args.multi_range.split(",")]
+        # Validate each range is known
+        for r in ranges:
+            if r not in DAY_MAP:
+                valid_ranges = ", ".join(sorted(DAY_MAP.keys()))
+                raise ValueError(
+                    f"Unknown time range: '{r}'. Valid options: {valid_ranges}"
+                )
         return None, None, None, None, ranges
 
     now_ts = int(time.time())
@@ -848,6 +924,17 @@ def parse_time_args(
     if args.start and args.end:
         start = int(args.start)
         end = int(args.end)
+
+        # Validate timestamps
+        validate_epoch_timestamp(start, "--start")
+        validate_epoch_timestamp(end, "--end")
+
+        if start >= end:
+            raise ValueError(
+                f"--start ({start}) must be before --end ({end}). "
+                f"These are epoch timestamps (seconds since 1970)."
+            )
+
         return start, end, None, None, []
 
     days = DAY_MAP.get(args.time_range, 1)
@@ -1678,6 +1765,7 @@ def generate_full_report(
     """Generate complete report for multiple pages.
 
     Uses concurrent processing for faster multi-page reports.
+    Shows tqdm progress bars when available.
 
     Args:
         pages: List of page names to analyze.
@@ -1690,20 +1778,35 @@ def generate_full_report(
     table_rows: list[dict[str, Any]] = []
     total = len(pages)
 
-    if show_progress:
+    if show_progress and not TQDM_AVAILABLE:
         print_info(f"Gathering metrics for {total} page(s)...")
+
+    # Use tqdm progress bar if available
+    use_tqdm = show_progress and TQDM_AVAILABLE and sys.stdout.isatty()
 
     # Use concurrent processing for multiple pages
     if use_concurrency and total > 1:
-        completed = 0
         with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, total)) as executor:
             future_to_page = {
                 executor.submit(gather_page_metrics, pg): pg for pg in pages
             }
-            for future in as_completed(future_to_page):
+
+            if use_tqdm:
+                futures_iter = tqdm(
+                    as_completed(future_to_page),
+                    total=total,
+                    desc="Gathering metrics",
+                    unit="page",
+                    bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
+                )
+            else:
+                futures_iter = as_completed(future_to_page)
+
+            completed = 0
+            for future in futures_iter:
                 pg = future_to_page[future]
                 completed += 1
-                if show_progress:
+                if show_progress and not use_tqdm:
                     print_progress(completed, total, pg)
                 try:
                     row = future.result()
@@ -1717,8 +1820,18 @@ def generate_full_report(
         table_rows.sort(key=lambda r: page_order.get(r.get("page", ""), 999))
     else:
         # Sequential processing for single page
-        for i, pg in enumerate(pages, 1):
-            if show_progress:
+        if use_tqdm:
+            page_iter = tqdm(
+                pages,
+                desc="Gathering metrics",
+                unit="page",
+                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
+            )
+        else:
+            page_iter = pages
+
+        for i, pg in enumerate(page_iter if use_tqdm else pages, 1):
+            if show_progress and not use_tqdm:
                 print_progress(i, total, pg)
             row = gather_page_metrics(pg)
             if row is not None:
@@ -2366,6 +2479,11 @@ Environment Variables:
         action="store_true",
         help="Enable verbose (debug) logging",
     )
+    util_group.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview actions without making API calls",
+    )
 
     return parser.parse_args()
 
@@ -2389,7 +2507,7 @@ _bt_insights_completions() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    opts="--page --top-pages --time-range --start --end --multi-range --compare --output --format --metrics --config --cache --clear-cache --alerts --generate-completion --test-connection --no-color --quiet --verbose --help"
+    opts="--page --top-pages --time-range --start --end --multi-range --compare --output --format --metrics --config --cache --clear-cache --alerts --generate-completion --test-connection --no-color --quiet --verbose --dry-run --help"
 
     case "${prev}" in
         --time-range)
@@ -2564,6 +2682,12 @@ def main() -> None:
         if show_progress:
             print_info(f"Caching enabled (TTL: {CACHE_TTL}s)")
 
+    # Enable dry-run mode if requested
+    global dry_run_mode
+    if args.dry_run:
+        dry_run_mode = True
+        print_warning("DRY RUN MODE - No API calls will be made")
+
     # Handle --test-connection
     if args.test_connection:
         print_info("Testing API connection...")
@@ -2597,7 +2721,12 @@ def main() -> None:
             print_info(f"Filtering metrics: {', '.join(args.metrics)}")
 
     global now, one_day_ago, two_days_ago
-    start, end, prev_start, prev_end, multi_list = parse_time_args(args)
+    try:
+        start, end, prev_start, prev_end, multi_list = parse_time_args(args)
+    except ValueError as e:
+        print_error(f"Invalid time argument: {e}")
+        sys.exit(1)
+
     now, one_day_ago, two_days_ago = end, start, prev_start
 
     if show_progress:

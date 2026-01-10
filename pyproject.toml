@@ -16,6 +16,9 @@ dependencies = [
 yaml = [
     "pyyaml>=6.0",
 ]
+progress = [
+    "tqdm>=4.60.0",
+]
 dev = [
     "pytest>=7.0.0",
 ]
