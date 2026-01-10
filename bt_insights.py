@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import csv
+import io
+import json
 import logging
 import os
 import re
+import sys
 import time
 from difflib import get_close_matches
 from typing import Any
@@ -27,6 +31,126 @@ logger = logging.getLogger(__name__)
 # Set to DEBUG to see detailed API calls, INFO for normal operation
 LOG_LEVEL = os.getenv("BT_LOG_LEVEL", "INFO").upper()
 logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
+
+
+# ==================
+# COLORED OUTPUT
+# ==================
+
+
+class Colors:
+    """ANSI color codes for terminal output."""
+
+    HEADER = "\033[95m"
+    BLUE = "\033[94m"
+    CYAN = "\033[96m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    RED = "\033[91m"
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    RESET = "\033[0m"
+
+    _enabled = True
+
+    @classmethod
+    def disable(cls) -> None:
+        """Disable colored output."""
+        cls._enabled = False
+
+    @classmethod
+    def enable(cls) -> None:
+        """Enable colored output."""
+        cls._enabled = True
+
+    @classmethod
+    def _wrap(cls, text: str, color: str) -> str:
+        """Wrap text with color if enabled."""
+        if cls._enabled and sys.stdout.isatty():
+            return f"{color}{text}{cls.RESET}"
+        return text
+
+    @classmethod
+    def success(cls, text: str) -> str:
+        """Format success message (green)."""
+        return cls._wrap(text, cls.GREEN)
+
+    @classmethod
+    def error(cls, text: str) -> str:
+        """Format error message (red)."""
+        return cls._wrap(text, cls.RED)
+
+    @classmethod
+    def warning(cls, text: str) -> str:
+        """Format warning message (yellow)."""
+        return cls._wrap(text, cls.YELLOW)
+
+    @classmethod
+    def info(cls, text: str) -> str:
+        """Format info message (cyan)."""
+        return cls._wrap(text, cls.CYAN)
+
+    @classmethod
+    def bold(cls, text: str) -> str:
+        """Format bold text."""
+        return cls._wrap(text, cls.BOLD)
+
+    @classmethod
+    def dim(cls, text: str) -> str:
+        """Format dim text."""
+        return cls._wrap(text, cls.DIM)
+
+
+def print_banner() -> None:
+    """Print application banner."""
+    banner = """
+╔══════════════════════════════════════════════════════════╗
+║           Blue Triangle CLI Reporter                     ║
+║           Performance & Revenue Analysis                 ║
+╚══════════════════════════════════════════════════════════╝
+"""
+    print(Colors.info(banner))
+
+
+def print_success(message: str) -> None:
+    """Print success message."""
+    print(f"{Colors.success('✓')} {message}")
+
+
+def print_error(message: str) -> None:
+    """Print error message."""
+    print(f"{Colors.error('✗')} {message}", file=sys.stderr)
+
+
+def print_warning(message: str) -> None:
+    """Print warning message."""
+    print(f"{Colors.warning('!')} {message}")
+
+
+def print_info(message: str) -> None:
+    """Print info message."""
+    print(f"{Colors.info('→')} {message}")
+
+
+def print_progress(current: int, total: int, label: str = "") -> None:
+    """Print progress indicator.
+
+    Args:
+        current: Current item number (1-indexed).
+        total: Total number of items.
+        label: Optional label to display.
+    """
+    width = 30
+    filled = int(width * current / total)
+    bar = "█" * filled + "░" * (width - filled)
+    percent = int(100 * current / total)
+    status = f"[{bar}] {percent}% ({current}/{total})"
+    if label:
+        status += f" - {label}"
+    # Use carriage return to overwrite line
+    print(f"\r{Colors.dim(status)}", end="", flush=True)
+    if current == total:
+        print()  # New line when complete
 
 # API Credentials loaded from environment variables
 # BT_API_EMAIL, BT_API_KEY, and BT_SITE_PREFIX are loaded from .env file
@@ -112,6 +236,71 @@ two_days_ago: int | None = None
 
 # Selected metrics filter (None means all metrics)
 selected_metrics: list[str] | None = None
+
+
+# ==================
+# CREDENTIAL VALIDATION
+# ==================
+
+
+def validate_credentials() -> tuple[bool, list[str]]:
+    """Validate that required API credentials are configured.
+
+    Returns:
+        Tuple of (is_valid, list of missing credential names).
+    """
+    missing = []
+
+    if not os.getenv("BT_API_EMAIL"):
+        missing.append("BT_API_EMAIL")
+    if not os.getenv("BT_API_KEY"):
+        missing.append("BT_API_KEY")
+    if not os.getenv("BT_SITE_PREFIX"):
+        missing.append("BT_SITE_PREFIX")
+
+    return len(missing) == 0, missing
+
+
+def test_api_connection() -> tuple[bool, str]:
+    """Test the API connection with current credentials.
+
+    Returns:
+        Tuple of (success, message).
+    """
+    is_valid, missing = validate_credentials()
+    if not is_valid:
+        return False, f"Missing credentials: {', '.join(missing)}"
+
+    # Try to make a simple API call
+    try:
+        url = BASE_URL + ENDPOINTS["performance"]
+        payload = {
+            "site": SITE_PREFIX,
+            "start": int(time.time()) - 86400,
+            "end": int(time.time()),
+            "dataColumns": ["pageViews"],
+            "group": ["pageName"],
+            "limit": 1,
+        }
+        response = requests.post(
+            url, headers=HEADERS, json=payload, timeout=REQUEST_TIMEOUT
+        )
+
+        if response.status_code == 200:
+            return True, "API connection successful"
+        elif response.status_code == 401:
+            return False, "Authentication failed - check your API key and email"
+        elif response.status_code == 403:
+            return False, "Access denied - check your site prefix and permissions"
+        else:
+            return False, f"API returned status {response.status_code}: {response.text[:200]}"
+
+    except requests.exceptions.Timeout:
+        return False, f"Connection timed out after {REQUEST_TIMEOUT}s - check your network"
+    except requests.exceptions.ConnectionError:
+        return False, "Could not connect to API - check your internet connection"
+    except Exception as e:
+        return False, f"Connection test failed: {str(e)}"
 
 
 # ==================
@@ -1151,17 +1340,28 @@ def build_page_report(page_name: str) -> str:
     return text
 
 
-def generate_full_report(pages: list[str]) -> str:
+def generate_full_report(
+    pages: list[str],
+    show_progress: bool = True,
+) -> tuple[str, list[dict[str, Any]]]:
     """Generate complete report for multiple pages.
 
     Args:
         pages: List of page names to analyze.
+        show_progress: Whether to show progress indicators.
 
     Returns:
-        Markdown formatted complete report.
+        Tuple of (Markdown formatted report, list of metric rows for export).
     """
-    table_rows = []
-    for pg in pages:
+    table_rows: list[dict[str, Any]] = []
+    total = len(pages)
+
+    if show_progress:
+        print_info(f"Gathering metrics for {total} page(s)...")
+
+    for i, pg in enumerate(pages, 1):
+        if show_progress:
+            print_progress(i, total, pg)
         row = gather_page_metrics(pg)
         if row is not None:
             table_rows.append(row)
@@ -1171,26 +1371,41 @@ def generate_full_report(pages: list[str]) -> str:
     big_md += "## Overall Summary Table\n"
     big_md += summary_table
 
-    for pg in pages:
+    if show_progress:
+        print_info("Building detailed page reports...")
+
+    for i, pg in enumerate(pages, 1):
+        if show_progress:
+            print_progress(i, total, pg)
         big_md += build_page_report(pg)
         big_md += "---\n\n"
 
     big_md += get_event_markers() + "\n"
-    return big_md
+    return big_md, table_rows
 
 
-def generate_multi_range_report(ranges: list[str], pages: list[str]) -> str:
+def generate_multi_range_report(
+    ranges: list[str],
+    pages: list[str],
+    show_progress: bool = True,
+) -> tuple[str, list[dict[str, Any]]]:
     """Generate report for multiple time ranges.
 
     Args:
         ranges: List of time range strings.
         pages: List of page names to analyze.
+        show_progress: Whether to show progress indicators.
 
     Returns:
-        Markdown formatted multi-range report.
+        Tuple of (Markdown formatted report, all metric rows).
     """
     sections = []
+    all_rows: list[dict[str, Any]] = []
+
     for rng_str in ranges:
+        if show_progress:
+            print_info(f"Processing time range: {rng_str}")
+
         s, e, ps, pe = compute_time_window(rng_str)
         global now, one_day_ago, two_days_ago
         now = e
@@ -1198,9 +1413,56 @@ def generate_multi_range_report(ranges: list[str], pages: list[str]) -> str:
         two_days_ago = ps
 
         sec_md = f"# Time Range: {rng_str}\n\n"
-        sec_md += generate_full_report(pages)
+        report_md, rows = generate_full_report(pages, show_progress=show_progress)
+        sec_md += report_md
+
+        # Add time range to each row for context
+        for row in rows:
+            row["time_range"] = rng_str
+        all_rows.extend(rows)
+
         sections.append(sec_md)
-    return "\n\n".join(sections)
+
+    return "\n\n".join(sections), all_rows
+
+
+# ========== EXPORT FUNCTIONS ==========
+
+
+def export_to_json(data: list[dict[str, Any]], output_file: str) -> None:
+    """Export metrics data to JSON format.
+
+    Args:
+        data: List of metric dictionaries.
+        output_file: Output file path.
+    """
+    # Ensure .json extension
+    if not output_file.endswith(".json"):
+        output_file = output_file.rsplit(".", 1)[0] + ".json"
+
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
+def export_to_csv(data: list[dict[str, Any]], output_file: str) -> None:
+    """Export metrics data to CSV format.
+
+    Args:
+        data: List of metric dictionaries.
+        output_file: Output file path.
+    """
+    if not data:
+        return
+
+    # Ensure .csv extension
+    if not output_file.endswith(".csv"):
+        output_file = output_file.rsplit(".", 1)[0] + ".csv"
+
+    fieldnames = data[0].keys()
+    with open(output_file, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(data)
 
 
 def analyze_trends(data_frame: pd.DataFrame) -> pd.DataFrame:
@@ -1270,57 +1532,105 @@ def parse_arguments() -> argparse.Namespace:
         Parsed arguments namespace.
     """
     parser = argparse.ArgumentParser(
-        description="Generate a Blue Triangle performance & revenue report."
+        description="Generate a Blue Triangle performance & revenue report.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s --page pdp checkout --time-range 7d
+  %(prog)s --top-pages --time-range 28d --output monthly_report.md
+  %(prog)s --page homepage --metrics LCP INP --format json
+  %(prog)s --test-connection
+
+Environment Variables:
+  BT_API_EMAIL       Your Blue Triangle account email
+  BT_API_KEY         Your Blue Triangle API key
+  BT_SITE_PREFIX     Your site prefix
+  BT_REQUEST_TIMEOUT Request timeout in seconds (default: 30)
+  BT_LOG_LEVEL       Log level: DEBUG, INFO, WARNING, ERROR
+""",
     )
-    parser.add_argument(
+
+    # Page selection
+    page_group = parser.add_argument_group("Page Selection")
+    page_group.add_argument(
         "--page",
         nargs="+",
-        help="Specify one or more page names (e.g. PDP CDP Checkout).",
+        help="Specify one or more page names (e.g. PDP CDP Checkout)",
     )
-    parser.add_argument(
-        "--output",
-        type=str,
-        default="full_bluetriangle_report.md",
-        help="Output filename",
+    page_group.add_argument(
+        "--top-pages",
+        action="store_true",
+        help="Generate report for top 20 pages by page views",
     )
-    parser.add_argument(
+
+    # Time range
+    time_group = parser.add_argument_group("Time Range")
+    time_group.add_argument(
         "--time-range",
         choices=list(DAY_MAP.keys()),
         default="7d",
-        help="Select one of the predefined time windows.",
+        help="Select a predefined time window (default: 7d)",
     )
-    parser.add_argument(
+    time_group.add_argument(
         "--start",
         type=int,
-        help="Custom start time (epoch) – overrides --time-range",
+        help="Custom start time (epoch timestamp) - overrides --time-range",
     )
-    parser.add_argument(
+    time_group.add_argument(
         "--end",
         type=int,
-        help="Custom end time (epoch) – overrides --time-range",
+        help="Custom end time (epoch timestamp) - overrides --time-range",
     )
-    parser.add_argument(
+    time_group.add_argument(
+        "--multi-range",
+        type=str,
+        help="Generate multiple reports, e.g. '24h,7d,28d'",
+    )
+
+    # Output options
+    output_group = parser.add_argument_group("Output Options")
+    output_group.add_argument(
+        "--output", "-o",
+        type=str,
+        default="full_bluetriangle_report.md",
+        help="Output filename (default: full_bluetriangle_report.md)",
+    )
+    output_group.add_argument(
+        "--format", "-f",
+        choices=["markdown", "json", "csv"],
+        default="markdown",
+        help="Output format (default: markdown)",
+    )
+    output_group.add_argument(
         "--metrics",
         nargs="+",
         choices=["LCP", "TBT", "CLS", "INP", "FB"],
-        help="Specify which metrics to include in the report.",
+        help="Filter report to specific metrics",
     )
-    parser.add_argument(
-        "--multi-range",
-        type=str,
-        help="Comma separated, e.g. '24h,28d,90d' for multiple sections",
-    )
-    parser.add_argument(
-        "--top-pages",
+
+    # Utility options
+    util_group = parser.add_argument_group("Utility Options")
+    util_group.add_argument(
+        "--test-connection",
         action="store_true",
-        help="Generate report for top pages by page views",
+        help="Test API connection and exit",
     )
-    parser.add_argument(
-        "--verbose",
-        "-v",
+    util_group.add_argument(
+        "--no-color",
+        action="store_true",
+        help="Disable colored output",
+    )
+    util_group.add_argument(
+        "--quiet", "-q",
+        action="store_true",
+        help="Suppress progress output",
+    )
+    util_group.add_argument(
+        "--verbose", "-v",
         action="store_true",
         help="Enable verbose (debug) logging",
     )
+
     return parser.parse_args()
 
 
@@ -1345,47 +1655,175 @@ def validate_pages(
     return valid_pages if valid_pages else None
 
 
+def print_summary(
+    pages_count: int,
+    rows_count: int,
+    output_file: str,
+    output_format: str,
+    elapsed_time: float,
+) -> None:
+    """Print completion summary.
+
+    Args:
+        pages_count: Number of pages analyzed.
+        rows_count: Number of data rows collected.
+        output_file: Output file path.
+        output_format: Output format used.
+        elapsed_time: Time taken in seconds.
+    """
+    print()
+    print(Colors.bold("═" * 50))
+    print(Colors.bold("  Report Complete"))
+    print(Colors.bold("═" * 50))
+    print(f"  Pages analyzed:  {Colors.info(str(pages_count))}")
+    print(f"  Data rows:       {Colors.info(str(rows_count))}")
+    print(f"  Output format:   {Colors.info(output_format)}")
+    print(f"  Output file:     {Colors.success(output_file)}")
+    print(f"  Time elapsed:    {Colors.dim(f'{elapsed_time:.2f}s')}")
+    print(Colors.bold("═" * 50))
+    print()
+
+
 def main() -> None:
     """Main entry point."""
     args = parse_arguments()
+    start_time = time.time()
+
+    # Handle color settings
+    if args.no_color:
+        Colors.disable()
 
     # Set up logging level
     if args.verbose:
         logger.setLevel(logging.DEBUG)
 
+    show_progress = not args.quiet
+
+    # Show banner unless quiet mode
+    if show_progress:
+        print_banner()
+
+    # Handle --test-connection
+    if args.test_connection:
+        print_info("Testing API connection...")
+        success, message = test_api_connection()
+        if success:
+            print_success(message)
+            sys.exit(0)
+        else:
+            print_error(message)
+            sys.exit(1)
+
+    # Validate credentials before proceeding
+    is_valid, missing = validate_credentials()
+    if not is_valid:
+        print_error("Missing required credentials:")
+        for cred in missing:
+            print(f"  - {Colors.warning(cred)}")
+        print()
+        print_info("Please set these in your .env file or as environment variables.")
+        print_info("See .env.example for a template.")
+        sys.exit(1)
+
+    if show_progress:
+        print_success("Credentials configured")
+
     # Set selected metrics filter
     global selected_metrics
     if args.metrics:
         selected_metrics = args.metrics
+        if show_progress:
+            print_info(f"Filtering metrics: {', '.join(args.metrics)}")
 
     global now, one_day_ago, two_days_ago
     start, end, prev_start, prev_end, multi_list = parse_time_args(args)
     now, one_day_ago, two_days_ago = end, start, prev_start
 
+    if show_progress:
+        if multi_list:
+            print_info(f"Time ranges: {', '.join(multi_list)}")
+        else:
+            print_info(f"Time range: {args.time_range}")
+
+    # Determine which pages to analyze
     if args.top_pages:
+        if show_progress:
+            print_info("Fetching top pages by page views...")
         df = fetch_top_page_names(limit=20)
         if df.empty or "pageName" not in df.columns:
-            logger.error("Could not fetch top pages")
-            return
+            print_error("Could not fetch top pages from API")
+            print_info("Check your credentials and network connection")
+            sys.exit(1)
         pages = df["pageName"].tolist()
+        if show_progress:
+            print_success(f"Found {len(pages)} pages")
     elif args.page:
         pages = validate_pages(args.page, AVAILABLE_PAGES)
         if pages is None:
-            return
+            print_error("No valid pages specified")
+            print_info("Check page names and try again")
+            sys.exit(1)
     else:
+        if show_progress:
+            print_info("Fetching available pages...")
         pages = update_available_pages(limit=20)
+        if show_progress:
+            print_success(f"Found {len(pages)} pages")
 
+    # Generate report
     try:
-        final_md = (
-            generate_multi_range_report(multi_list, pages)
-            if multi_list
-            else generate_full_report(pages)
-        )
-        with open(args.output, "w", encoding="utf-8") as f:
-            f.write(final_md)
-        logger.info("Report saved to '%s'", args.output)
+        if multi_list:
+            final_md, data_rows = generate_multi_range_report(
+                multi_list, pages, show_progress=show_progress
+            )
+        else:
+            final_md, data_rows = generate_full_report(
+                pages, show_progress=show_progress
+            )
+
+        # Handle output format
+        output_file = args.output
+        output_format = args.format
+
+        if output_format == "json":
+            if not output_file.endswith(".json"):
+                output_file = output_file.rsplit(".", 1)[0] + ".json"
+            export_to_json(data_rows, output_file)
+        elif output_format == "csv":
+            if not output_file.endswith(".csv"):
+                output_file = output_file.rsplit(".", 1)[0] + ".csv"
+            export_to_csv(data_rows, output_file)
+        else:  # markdown
+            with open(output_file, "w", encoding="utf-8") as f:
+                f.write(final_md)
+
+        elapsed_time = time.time() - start_time
+
+        if show_progress:
+            print_summary(
+                pages_count=len(pages),
+                rows_count=len(data_rows),
+                output_file=output_file,
+                output_format=output_format,
+                elapsed_time=elapsed_time,
+            )
+        else:
+            print_success(f"Report saved to '{output_file}'")
+
+    except KeyboardInterrupt:
+        print()
+        print_warning("Operation cancelled by user")
+        sys.exit(130)
+    except PermissionError:
+        print_error(f"Permission denied: Cannot write to '{args.output}'")
+        print_info("Check file permissions or choose a different output path")
+        sys.exit(1)
     except Exception as e:
-        logger.error("Error saving report: %s", e)
+        print_error(f"Error generating report: {e}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":
