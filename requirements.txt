@@ -3,5 +3,8 @@ requests
 matplotlib
 python-dotenv
 
+# Optional: For YAML config file support
+pyyaml
+
 # Development dependencies
 pytest>=7.0.0

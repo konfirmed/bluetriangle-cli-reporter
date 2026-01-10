@@ -13,6 +13,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+yaml = [
+    "pyyaml>=6.0",
+]
 dev = [
     "pytest>=7.0.0",
 ]

@@ -136,6 +136,56 @@ python bt_insights.py --page pdp --quiet -o report.md
 python bt_insights.py --page pdp --no-color
 ```
 
+### HTML Reports with Charts
+
+```bash
+# Generate HTML report with embedded Chart.js visualizations
+python bt_insights.py --page pdp checkout --format html -o report.html
+```
+
+### API Caching
+
+```bash
+# Enable caching to speed up repeated requests (1 hour TTL)
+python bt_insights.py --page pdp --cache
+
+# Clear the cache
+python bt_insights.py --clear-cache
+```
+
+### Configuration File
+
+```bash
+# Use a custom config file
+python bt_insights.py --page pdp --config my_config.yaml
+
+# Default locations searched: bt_config.yaml, ~/.bt_config.yaml
+```
+
+### Threshold Alerts
+
+```bash
+# Show alerts for metrics exceeding Web Vitals thresholds
+python bt_insights.py --page pdp --alerts
+```
+
+### Period Comparison
+
+```bash
+# Compare two time periods (epoch timestamps)
+python bt_insights.py --page pdp --compare 1704067200 1704672000 1704672000 1705276800
+```
+
+### Shell Completion
+
+```bash
+# Generate bash completion script
+python bt_insights.py --generate-completion bash > /etc/bash_completion.d/bt_insights
+
+# Generate zsh completion script
+python bt_insights.py --generate-completion zsh > ~/.zsh/completions/_bt_insights
+```
+
 ### Debugging
 
 ```bash
@@ -175,14 +225,30 @@ python bt_insights.py --help
 | Flag | Description | Example |
 |------|-------------|---------|
 | `--output`, `-o` | Output filename | `-o report.md` |
-| `--format`, `-f` | Output format: markdown, json, csv | `--format json` |
+| `--format`, `-f` | Output format: markdown, json, csv, html | `--format html` |
 | `--metrics` | Filter to specific metrics | `--metrics LCP TBT CLS` |
+| `--alerts` | Show threshold alerts for metrics | `--alerts` |
+
+### Caching & Configuration
+
+| Flag | Description | Example |
+|------|-------------|---------|
+| `--cache` | Enable API response caching | `--cache` |
+| `--clear-cache` | Clear cache and exit | `--clear-cache` |
+| `--config` | Path to YAML config file | `--config my_config.yaml` |
+
+### Comparison Mode
+
+| Flag | Description | Example |
+|------|-------------|---------|
+| `--compare` | Compare two time periods (4 epoch timestamps) | `--compare START1 END1 START2 END2` |
 
 ### Utility Options
 
 | Flag | Description |
 |------|-------------|
 | `--test-connection` | Test API connection and exit |
+| `--generate-completion` | Generate shell completion (bash/zsh) |
 | `--no-color` | Disable colored output |
 | `--quiet`, `-q` | Suppress progress output |
 | `--verbose`, `-v` | Enable debug logging |
@@ -271,9 +337,15 @@ pytest tests/ -v
 - [x] Add colored terminal output
 - [x] Add progress indicators
 - [x] Add connection testing
+- [x] Add HTML reports with Chart.js visualizations
+- [x] Add API response caching
+- [x] Add YAML config file support
+- [x] Add threshold alerting (Web Vitals)
+- [x] Add time period comparison mode
+- [x] Add shell completion scripts (bash/zsh)
 - [ ] Add Slack/email integration for auto-sharing
-- [ ] Auto-visualize reports in Jupyter or inline via CLI
 - [ ] Add PDF export option
+- [ ] Add CI/CD pipeline
 
 ---
 

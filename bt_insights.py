@@ -4,20 +4,31 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import io
 import json
 import logging
 import os
+import pickle
 import re
 import sys
 import time
+from datetime import datetime
 from difflib import get_close_matches
+from pathlib import Path
 from typing import Any
 
 import matplotlib.pyplot as plt
 import pandas as pd
 import requests
 from dotenv import load_dotenv
+
+# Try to import yaml for config file support
+try:
+    import yaml
+    YAML_AVAILABLE = True
+except ImportError:
+    YAML_AVAILABLE = False
 
 load_dotenv()
 
@@ -237,6 +248,260 @@ two_days_ago: int | None = None
 # Selected metrics filter (None means all metrics)
 selected_metrics: list[str] | None = None
 
+# Alert thresholds (None means no alerting)
+alert_thresholds: dict[str, float] | None = None
+
+# Cache settings
+CACHE_DIR = Path.home() / ".bt_cache"
+CACHE_TTL = int(os.getenv("BT_CACHE_TTL", "300"))  # 5 minutes default
+cache_enabled = False
+
+
+# ==================
+# CONFIGURATION FILE
+# ==================
+
+
+def load_config_file(config_path: str | None = None) -> dict[str, Any]:
+    """Load configuration from YAML file.
+
+    Args:
+        config_path: Path to config file. If None, searches default locations.
+
+    Returns:
+        Configuration dictionary.
+    """
+    if not YAML_AVAILABLE:
+        return {}
+
+    # Default search paths
+    search_paths = [
+        Path(config_path) if config_path else None,
+        Path("bt_config.yaml"),
+        Path("bt_config.yml"),
+        Path.home() / ".bt_config.yaml",
+        Path.home() / ".config" / "bluetriangle" / "config.yaml",
+    ]
+
+    for path in search_paths:
+        if path and path.exists():
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    config = yaml.safe_load(f) or {}
+                    logger.debug("Loaded config from %s", path)
+                    return config
+            except Exception as e:
+                logger.warning("Failed to load config from %s: %s", path, e)
+
+    return {}
+
+
+def apply_config(config: dict[str, Any]) -> None:
+    """Apply configuration values to global settings.
+
+    Args:
+        config: Configuration dictionary.
+    """
+    global SITE_PREFIX, REQUEST_TIMEOUT, alert_thresholds, cache_enabled, CACHE_TTL
+
+    # API settings
+    if "api" in config:
+        api_config = config["api"]
+        if "email" in api_config and not os.getenv("BT_API_EMAIL"):
+            os.environ["BT_API_EMAIL"] = api_config["email"]
+            HEADERS["X-API-Email"] = api_config["email"]
+        if "key" in api_config and not os.getenv("BT_API_KEY"):
+            os.environ["BT_API_KEY"] = api_config["key"]
+            HEADERS["X-API-Key"] = api_config["key"]
+        if "site_prefix" in api_config and not os.getenv("BT_SITE_PREFIX"):
+            os.environ["BT_SITE_PREFIX"] = api_config["site_prefix"]
+            SITE_PREFIX = api_config["site_prefix"]
+        if "timeout" in api_config:
+            REQUEST_TIMEOUT = int(api_config["timeout"])
+
+    # Cache settings
+    if "cache" in config:
+        cache_config = config["cache"]
+        cache_enabled = cache_config.get("enabled", False)
+        if "ttl" in cache_config:
+            CACHE_TTL = int(cache_config["ttl"])
+
+    # Alert thresholds
+    if "thresholds" in config:
+        alert_thresholds = config["thresholds"]
+
+
+# ==================
+# CACHING
+# ==================
+
+
+def get_cache_key(endpoint: str, payload: dict[str, Any] | None) -> str:
+    """Generate cache key from endpoint and payload.
+
+    Args:
+        endpoint: API endpoint.
+        payload: Request payload.
+
+    Returns:
+        Cache key string.
+    """
+    key_data = f"{endpoint}:{json.dumps(payload, sort_keys=True)}"
+    return hashlib.md5(key_data.encode()).hexdigest()
+
+
+def get_cached_response(cache_key: str) -> dict[str, Any] | list[Any] | None:
+    """Retrieve cached response if valid.
+
+    Args:
+        cache_key: Cache key.
+
+    Returns:
+        Cached data or None if not found/expired.
+    """
+    if not cache_enabled:
+        return None
+
+    cache_file = CACHE_DIR / f"{cache_key}.pkl"
+    if not cache_file.exists():
+        return None
+
+    try:
+        with open(cache_file, "rb") as f:
+            cached = pickle.load(f)
+
+        if time.time() - cached["timestamp"] > CACHE_TTL:
+            cache_file.unlink()  # Remove expired cache
+            return None
+
+        logger.debug("Cache hit for %s", cache_key)
+        return cached["data"]
+    except Exception:
+        return None
+
+
+def set_cached_response(
+    cache_key: str, data: dict[str, Any] | list[Any]
+) -> None:
+    """Store response in cache.
+
+    Args:
+        cache_key: Cache key.
+        data: Data to cache.
+    """
+    if not cache_enabled:
+        return
+
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_file = CACHE_DIR / f"{cache_key}.pkl"
+
+    try:
+        with open(cache_file, "wb") as f:
+            pickle.dump({"timestamp": time.time(), "data": data}, f)
+        logger.debug("Cached response for %s", cache_key)
+    except Exception as e:
+        logger.warning("Failed to cache response: %s", e)
+
+
+def clear_cache() -> int:
+    """Clear all cached responses.
+
+    Returns:
+        Number of files removed.
+    """
+    if not CACHE_DIR.exists():
+        return 0
+
+    count = 0
+    for cache_file in CACHE_DIR.glob("*.pkl"):
+        try:
+            cache_file.unlink()
+            count += 1
+        except Exception:
+            pass
+
+    return count
+
+
+# ==================
+# ALERTING / THRESHOLDS
+# ==================
+
+
+# Default thresholds based on Web Vitals recommendations
+DEFAULT_THRESHOLDS: dict[str, dict[str, float]] = {
+    "LCP": {"good": 2500, "poor": 4000},
+    "INP": {"good": 200, "poor": 500},
+    "CLS": {"good": 0.1, "poor": 0.25},
+    "TBT": {"good": 200, "poor": 600},
+    "FB": {"good": 800, "poor": 1800},
+}
+
+
+def check_threshold(
+    metric: str, value: float | None
+) -> tuple[str, str | None]:
+    """Check if metric value exceeds threshold.
+
+    Args:
+        metric: Metric name (LCP, INP, CLS, etc.).
+        value: Metric value.
+
+    Returns:
+        Tuple of (status, alert_message).
+        Status is 'good', 'needs-improvement', 'poor', or 'unknown'.
+    """
+    if value is None:
+        return "unknown", None
+
+    thresholds = alert_thresholds or DEFAULT_THRESHOLDS
+    if metric not in thresholds:
+        return "unknown", None
+
+    thresh = thresholds[metric]
+    good_thresh = thresh.get("good", float("inf"))
+    poor_thresh = thresh.get("poor", float("inf"))
+
+    if value <= good_thresh:
+        return "good", None
+    elif value <= poor_thresh:
+        return "needs-improvement", f"{metric} ({value}) needs improvement (threshold: {good_thresh})"
+    else:
+        return "poor", f"{metric} ({value}) is POOR (threshold: {poor_thresh})"
+
+
+def get_threshold_alerts(metrics: dict[str, Any]) -> list[str]:
+    """Get all threshold alerts for a set of metrics.
+
+    Args:
+        metrics: Dictionary of metric values.
+
+    Returns:
+        List of alert messages.
+    """
+    alerts = []
+
+    metric_mapping = {
+        "largestContentfulPaint": "LCP",
+        "intToNextPaint": "INP",
+        "cumulativeLayoutShift": "CLS",
+        "totalBlockingTime": "TBT",
+        "firstByte": "FB",
+    }
+
+    for api_key, label in metric_mapping.items():
+        value = metrics.get(api_key)
+        if value is not None:
+            try:
+                value = float(value)
+                status, alert = check_threshold(label, value)
+                if alert:
+                    alerts.append(alert)
+            except (ValueError, TypeError):
+                pass
+
+    return alerts
+
 
 # ==================
 # CREDENTIAL VALIDATION
@@ -370,6 +635,7 @@ def fetch_data(
     payload: dict[str, Any] | None = None,
     method: str = "POST",
     params: dict[str, Any] | None = None,
+    use_cache: bool = True,
 ) -> dict[str, Any] | list[Any] | None:
     """Generic function to fetch JSON from the Blue Triangle API.
 
@@ -378,10 +644,20 @@ def fetch_data(
         payload: JSON payload for POST requests.
         method: HTTP method (GET or POST).
         params: Query parameters for GET requests.
+        use_cache: Whether to use caching for this request.
 
     Returns:
         Parsed JSON response or None on error.
     """
+    # Check cache first
+    cache_data = payload if method == "POST" else params
+    cache_key = get_cache_key(endpoint, cache_data)
+
+    if use_cache:
+        cached = get_cached_response(cache_key)
+        if cached is not None:
+            return cached
+
     url = BASE_URL + endpoint
     try:
         if method == "GET":
@@ -395,7 +671,13 @@ def fetch_data(
                 url, headers=HEADERS, json=payload, timeout=REQUEST_TIMEOUT
             )
         r.raise_for_status()
-        return r.json()
+        data = r.json()
+
+        # Cache successful response
+        if use_cache and data is not None:
+            set_cached_response(cache_key, data)
+
+        return data
     except requests.exceptions.HTTPError as errh:
         logger.error("HTTP Error: %s", errh)
     except requests.exceptions.ConnectionError as errc:
@@ -1465,6 +1747,334 @@ def export_to_csv(data: list[dict[str, Any]], output_file: str) -> None:
         writer.writerows(data)
 
 
+def export_to_html(
+    data: list[dict[str, Any]],
+    markdown_content: str,
+    output_file: str,
+) -> None:
+    """Export report as HTML with embedded charts.
+
+    Args:
+        data: List of metric dictionaries.
+        markdown_content: Markdown report content.
+        output_file: Output file path.
+    """
+    if not output_file.endswith(".html"):
+        output_file = output_file.rsplit(".", 1)[0] + ".html"
+
+    # Generate chart data
+    chart_data = []
+    for row in data:
+        chart_data.append({
+            "page": row.get("page", "Unknown"),
+            "lcp_curr": row.get("lcp_curr", 0) or 0,
+            "lcp_prev": row.get("lcp_prev", 0) or 0,
+            "inp_curr": row.get("inp_curr", 0) or 0,
+            "inp_prev": row.get("inp_prev", 0) or 0,
+            "cls_curr": (row.get("cls_curr", 0) or 0) * 1000,  # Scale for visibility
+            "cls_prev": (row.get("cls_prev", 0) or 0) * 1000,
+            "tbt_curr": row.get("tbt_curr", 0) or 0,
+            "tbt_prev": row.get("tbt_prev", 0) or 0,
+        })
+
+    # Convert markdown to basic HTML (simple conversion)
+    html_body = markdown_content
+    # Convert headers
+    html_body = re.sub(r'^# (.+)$', r'<h1>\1</h1>', html_body, flags=re.MULTILINE)
+    html_body = re.sub(r'^## (.+)$', r'<h2>\1</h2>', html_body, flags=re.MULTILINE)
+    html_body = re.sub(r'^### (.+)$', r'<h3>\1</h3>', html_body, flags=re.MULTILINE)
+    html_body = re.sub(r'^#### (.+)$', r'<h4>\1</h4>', html_body, flags=re.MULTILINE)
+    # Convert bold
+    html_body = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', html_body)
+    # Convert list items
+    html_body = re.sub(r'^- (.+)$', r'<li>\1</li>', html_body, flags=re.MULTILINE)
+    # Convert line breaks
+    html_body = html_body.replace('\n\n', '</p><p>')
+    html_body = f'<p>{html_body}</p>'
+
+    html_template = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blue Triangle Performance Report</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {{
+            --bg-color: #1a1a2e;
+            --card-bg: #16213e;
+            --text-color: #eee;
+            --accent: #0f4c75;
+            --success: #00d9a5;
+            --warning: #ffc107;
+            --danger: #e74c3c;
+        }}
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-color);
+            color: var(--text-color);
+            line-height: 1.6;
+            padding: 2rem;
+        }}
+        .container {{ max-width: 1400px; margin: 0 auto; }}
+        h1 {{ color: #fff; margin-bottom: 1rem; font-size: 2rem; }}
+        h2 {{ color: #3498db; margin: 2rem 0 1rem; border-bottom: 2px solid var(--accent); padding-bottom: 0.5rem; }}
+        h3 {{ color: #9b59b6; margin: 1.5rem 0 0.5rem; }}
+        .card {{
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }}
+        .charts-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }}
+        .chart-container {{
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 1rem;
+            height: 300px;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+        }}
+        th, td {{
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid #333;
+        }}
+        th {{ background: var(--accent); color: #fff; }}
+        tr:hover {{ background: rgba(255,255,255,0.05); }}
+        .metric-good {{ color: var(--success); }}
+        .metric-warning {{ color: var(--warning); }}
+        .metric-poor {{ color: var(--danger); }}
+        .report-content {{ background: var(--card-bg); padding: 2rem; border-radius: 12px; }}
+        .report-content p {{ margin-bottom: 1rem; }}
+        .report-content li {{ margin-left: 1.5rem; margin-bottom: 0.5rem; }}
+        .timestamp {{ color: #888; font-size: 0.9rem; margin-bottom: 2rem; }}
+        .alerts {{ background: #2c1810; border-left: 4px solid var(--danger); padding: 1rem; margin: 1rem 0; border-radius: 0 8px 8px 0; }}
+        .alerts h4 {{ color: var(--danger); margin-bottom: 0.5rem; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Blue Triangle Performance Report</h1>
+        <p class="timestamp">Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+
+        <div class="charts-grid">
+            <div class="chart-container">
+                <canvas id="lcpChart"></canvas>
+            </div>
+            <div class="chart-container">
+                <canvas id="inpChart"></canvas>
+            </div>
+            <div class="chart-container">
+                <canvas id="clsChart"></canvas>
+            </div>
+            <div class="chart-container">
+                <canvas id="tbtChart"></canvas>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Metrics Summary</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Page</th>
+                        <th>LCP (ms)</th>
+                        <th>INP (ms)</th>
+                        <th>CLS</th>
+                        <th>TBT (ms)</th>
+                    </tr>
+                </thead>
+                <tbody id="metricsTable"></tbody>
+            </table>
+        </div>
+
+        <div class="report-content">
+            {html_body}
+        </div>
+    </div>
+
+    <script>
+        const chartData = {json.dumps(chart_data)};
+
+        const chartOptions = {{
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {{
+                legend: {{ labels: {{ color: '#eee' }} }}
+            }},
+            scales: {{
+                x: {{ ticks: {{ color: '#eee' }}, grid: {{ color: '#333' }} }},
+                y: {{ ticks: {{ color: '#eee' }}, grid: {{ color: '#333' }} }}
+            }}
+        }};
+
+        function createChart(id, label, currKey, prevKey, unit) {{
+            const ctx = document.getElementById(id).getContext('2d');
+            new Chart(ctx, {{
+                type: 'bar',
+                data: {{
+                    labels: chartData.map(d => d.page),
+                    datasets: [
+                        {{
+                            label: 'Current ' + label,
+                            data: chartData.map(d => d[currKey]),
+                            backgroundColor: 'rgba(52, 152, 219, 0.8)',
+                        }},
+                        {{
+                            label: 'Previous ' + label,
+                            data: chartData.map(d => d[prevKey]),
+                            backgroundColor: 'rgba(155, 89, 182, 0.6)',
+                        }}
+                    ]
+                }},
+                options: {{ ...chartOptions, plugins: {{ ...chartOptions.plugins, title: {{ display: true, text: label + ' (' + unit + ')', color: '#fff' }} }} }}
+            }});
+        }}
+
+        createChart('lcpChart', 'LCP', 'lcp_curr', 'lcp_prev', 'ms');
+        createChart('inpChart', 'INP', 'inp_curr', 'inp_prev', 'ms');
+        createChart('clsChart', 'CLS', 'cls_curr', 'cls_prev', 'x1000');
+        createChart('tbtChart', 'TBT', 'tbt_curr', 'tbt_prev', 'ms');
+
+        // Populate table
+        const tbody = document.getElementById('metricsTable');
+        chartData.forEach(row => {{
+            const tr = document.createElement('tr');
+            const getClass = (val, good, poor) => val <= good ? 'metric-good' : val <= poor ? 'metric-warning' : 'metric-poor';
+            tr.innerHTML = `
+                <td>${{row.page}}</td>
+                <td class="${{getClass(row.lcp_curr, 2500, 4000)}}">${{row.lcp_curr.toFixed(0)}}</td>
+                <td class="${{getClass(row.inp_curr, 200, 500)}}">${{row.inp_curr.toFixed(0)}}</td>
+                <td class="${{getClass(row.cls_curr/1000, 0.1, 0.25)}}">${{(row.cls_curr/1000).toFixed(3)}}</td>
+                <td class="${{getClass(row.tbt_curr, 200, 600)}}">${{row.tbt_curr.toFixed(0)}}</td>
+            `;
+            tbody.appendChild(tr);
+        }});
+    </script>
+</body>
+</html>"""
+
+    with open(output_file, "w", encoding="utf-8") as f:
+        f.write(html_template)
+
+
+# ========== COMPARISON MODE ==========
+
+
+def compare_time_periods(
+    pages: list[str],
+    period1_start: int,
+    period1_end: int,
+    period2_start: int,
+    period2_end: int,
+    show_progress: bool = True,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Compare metrics between two arbitrary time periods.
+
+    Args:
+        pages: List of page names to analyze.
+        period1_start: Start of first period (epoch).
+        period1_end: End of first period (epoch).
+        period2_start: Start of second period (epoch).
+        period2_end: End of second period (epoch).
+        show_progress: Whether to show progress indicators.
+
+    Returns:
+        Tuple of (Markdown report, comparison data).
+    """
+    global now, one_day_ago, two_days_ago
+
+    comparison_data = []
+
+    if show_progress:
+        print_info("Fetching Period 1 data...")
+
+    # Fetch period 1 data
+    now = period1_end
+    one_day_ago = period1_start
+    two_days_ago = None
+
+    period1_metrics = {}
+    for pg in pages:
+        row = gather_page_metrics(pg)
+        if row:
+            period1_metrics[pg] = row
+
+    if show_progress:
+        print_info("Fetching Period 2 data...")
+
+    # Fetch period 2 data
+    now = period2_end
+    one_day_ago = period2_start
+
+    period2_metrics = {}
+    for pg in pages:
+        row = gather_page_metrics(pg)
+        if row:
+            period2_metrics[pg] = row
+
+    # Build comparison report
+    p1_start_str = datetime.fromtimestamp(period1_start).strftime('%Y-%m-%d %H:%M')
+    p1_end_str = datetime.fromtimestamp(period1_end).strftime('%Y-%m-%d %H:%M')
+    p2_start_str = datetime.fromtimestamp(period2_start).strftime('%Y-%m-%d %H:%M')
+    p2_end_str = datetime.fromtimestamp(period2_end).strftime('%Y-%m-%d %H:%M')
+
+    md = "# Time Period Comparison Report\n\n"
+    md += f"**Period 1:** {p1_start_str} to {p1_end_str}\n\n"
+    md += f"**Period 2:** {p2_start_str} to {p2_end_str}\n\n"
+
+    md += "## Comparison Summary\n\n"
+    md += "| Page | Metric | Period 1 | Period 2 | Change | % Change |\n"
+    md += "|------|--------|----------|----------|--------|----------|\n"
+
+    metrics_to_compare = [
+        ("lcp_curr", "LCP"),
+        ("inp_curr", "INP"),
+        ("cls_curr", "CLS"),
+        ("tbt_curr", "TBT"),
+        ("fb_curr", "First Byte"),
+        ("onload_curr", "Onload"),
+    ]
+
+    for pg in pages:
+        p1 = period1_metrics.get(pg, {})
+        p2 = period2_metrics.get(pg, {})
+
+        row_data = {"page": pg}
+
+        for metric_key, metric_label in metrics_to_compare:
+            v1 = p1.get(metric_key)
+            v2 = p2.get(metric_key)
+
+            row_data[f"p1_{metric_key}"] = v1
+            row_data[f"p2_{metric_key}"] = v2
+
+            if v1 is not None and v2 is not None:
+                change = v2 - v1
+                pct_change = ((v2 - v1) / v1 * 100) if v1 != 0 else 0
+                arrow = "↑" if change > 0 else "↓" if change < 0 else "→"
+                md += f"| {pg} | {metric_label} | {v1:.2f} | {v2:.2f} | {arrow} {abs(change):.2f} | {pct_change:+.1f}% |\n"
+                row_data[f"change_{metric_key}"] = change
+                row_data[f"pct_{metric_key}"] = pct_change
+            else:
+                md += f"| {pg} | {metric_label} | N/A | N/A | - | - |\n"
+
+        comparison_data.append(row_data)
+
+    return md, comparison_data
+
+
 def analyze_trends(data_frame: pd.DataFrame) -> pd.DataFrame:
     """Analyze performance trends over time.
 
@@ -1587,6 +2197,15 @@ Environment Variables:
         help="Generate multiple reports, e.g. '24h,7d,28d'",
     )
 
+    # Time period comparison
+    time_group.add_argument(
+        "--compare",
+        nargs=4,
+        type=int,
+        metavar=("P1_START", "P1_END", "P2_START", "P2_END"),
+        help="Compare two time periods (4 epoch timestamps)",
+    )
+
     # Output options
     output_group = parser.add_argument_group("Output Options")
     output_group.add_argument(
@@ -1597,7 +2216,7 @@ Environment Variables:
     )
     output_group.add_argument(
         "--format", "-f",
-        choices=["markdown", "json", "csv"],
+        choices=["markdown", "json", "csv", "html"],
         default="markdown",
         help="Output format (default: markdown)",
     )
@@ -1606,6 +2225,34 @@ Environment Variables:
         nargs="+",
         choices=["LCP", "TBT", "CLS", "INP", "FB"],
         help="Filter report to specific metrics",
+    )
+
+    # Advanced options
+    advanced_group = parser.add_argument_group("Advanced Options")
+    advanced_group.add_argument(
+        "--config",
+        type=str,
+        help="Path to YAML config file",
+    )
+    advanced_group.add_argument(
+        "--cache",
+        action="store_true",
+        help="Enable API response caching",
+    )
+    advanced_group.add_argument(
+        "--clear-cache",
+        action="store_true",
+        help="Clear API cache and exit",
+    )
+    advanced_group.add_argument(
+        "--alerts",
+        action="store_true",
+        help="Show threshold alerts for metrics exceeding Web Vitals limits",
+    )
+    advanced_group.add_argument(
+        "--generate-completion",
+        choices=["bash", "zsh"],
+        help="Generate shell completion script and exit",
     )
 
     # Utility options
@@ -1632,6 +2279,104 @@ Environment Variables:
     )
 
     return parser.parse_args()
+
+
+def generate_shell_completion(shell: str) -> str:
+    """Generate shell completion script.
+
+    Args:
+        shell: Shell type ('bash' or 'zsh').
+
+    Returns:
+        Completion script content.
+    """
+    if shell == "bash":
+        return '''# Bash completion for bt_insights.py
+# Add this to your .bashrc or .bash_completion
+
+_bt_insights_completions() {
+    local cur prev opts
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    opts="--page --top-pages --time-range --start --end --multi-range --compare --output --format --metrics --config --cache --clear-cache --alerts --generate-completion --test-connection --no-color --quiet --verbose --help"
+
+    case "${prev}" in
+        --time-range)
+            COMPREPLY=( $(compgen -W "qd hd 24h xd 2d 6d 7d 28d 30d 90d 1y 2y 3y" -- ${cur}) )
+            return 0
+            ;;
+        --format|-f)
+            COMPREPLY=( $(compgen -W "markdown json csv html" -- ${cur}) )
+            return 0
+            ;;
+        --metrics)
+            COMPREPLY=( $(compgen -W "LCP TBT CLS INP FB" -- ${cur}) )
+            return 0
+            ;;
+        --generate-completion)
+            COMPREPLY=( $(compgen -W "bash zsh" -- ${cur}) )
+            return 0
+            ;;
+        --output|-o|--config)
+            COMPREPLY=( $(compgen -f -- ${cur}) )
+            return 0
+            ;;
+    esac
+
+    if [[ ${cur} == -* ]]; then
+        COMPREPLY=( $(compgen -W "${opts}" -- ${cur}) )
+        return 0
+    fi
+}
+
+complete -F _bt_insights_completions bt_insights.py
+complete -F _bt_insights_completions python bt_insights.py
+'''
+
+    elif shell == "zsh":
+        return '''#compdef bt_insights.py python
+
+# Zsh completion for bt_insights.py
+# Add this to your .zshrc or place in your fpath
+
+_bt_insights() {
+    local -a opts time_ranges formats metrics shells
+
+    time_ranges=(qd hd 24h xd 2d 6d 7d 28d 30d 90d 1y 2y 3y)
+    formats=(markdown json csv html)
+    metrics=(LCP TBT CLS INP FB)
+    shells=(bash zsh)
+
+    _arguments -C \\
+        '--page[Specify page names]:page:' \\
+        '--top-pages[Analyze top pages by views]' \\
+        '--time-range[Time window]:range:($time_ranges)' \\
+        '--start[Custom start time (epoch)]:timestamp:' \\
+        '--end[Custom end time (epoch)]:timestamp:' \\
+        '--multi-range[Multiple time ranges]:ranges:' \\
+        '--compare[Compare two periods]:timestamps:' \\
+        {-o,--output}'[Output filename]:file:_files' \\
+        {-f,--format}'[Output format]:format:($formats)' \\
+        '--metrics[Filter metrics]:metrics:($metrics)' \\
+        '--config[Config file path]:file:_files -g "*.yaml *.yml"' \\
+        '--cache[Enable caching]' \\
+        '--clear-cache[Clear cache]' \\
+        '--alerts[Show threshold alerts]' \\
+        '--generate-completion[Generate completion script]:shell:($shells)' \\
+        '--test-connection[Test API connection]' \\
+        '--no-color[Disable colors]' \\
+        {-q,--quiet}'[Suppress progress]' \\
+        {-v,--verbose}'[Enable debug logging]' \\
+        '--help[Show help]'
+}
+
+compdef _bt_insights bt_insights.py
+compdef _bt_insights "python bt_insights.py"
+'''
+
+    return ""
 
 
 def validate_pages(
@@ -1686,6 +2431,8 @@ def print_summary(
 
 def main() -> None:
     """Main entry point."""
+    global cache_enabled
+
     args = parse_arguments()
     start_time = time.time()
 
@@ -1699,9 +2446,34 @@ def main() -> None:
 
     show_progress = not args.quiet
 
+    # Handle --generate-completion (no banner needed)
+    if args.generate_completion:
+        print(generate_shell_completion(args.generate_completion))
+        sys.exit(0)
+
+    # Handle --clear-cache
+    if args.clear_cache:
+        count = clear_cache()
+        print_success(f"Cleared {count} cached responses")
+        sys.exit(0)
+
     # Show banner unless quiet mode
     if show_progress:
         print_banner()
+
+    # Load and apply config file
+    if args.config or Path("bt_config.yaml").exists() or Path("bt_config.yml").exists():
+        config = load_config_file(args.config)
+        if config:
+            apply_config(config)
+            if show_progress:
+                print_info("Loaded configuration file")
+
+    # Enable caching if requested
+    if args.cache:
+        cache_enabled = True
+        if show_progress:
+            print_info(f"Caching enabled (TTL: {CACHE_TTL}s)")
 
     # Handle --test-connection
     if args.test_connection:
@@ -1740,7 +2512,9 @@ def main() -> None:
     now, one_day_ago, two_days_ago = end, start, prev_start
 
     if show_progress:
-        if multi_list:
+        if args.compare:
+            print_info("Mode: Time period comparison")
+        elif multi_list:
             print_info(f"Time ranges: {', '.join(multi_list)}")
         else:
             print_info(f"Time range: {args.time_range}")
@@ -1772,7 +2546,14 @@ def main() -> None:
 
     # Generate report
     try:
-        if multi_list:
+        # Handle comparison mode
+        if args.compare:
+            p1_start, p1_end, p2_start, p2_end = args.compare
+            final_md, data_rows = compare_time_periods(
+                pages, p1_start, p1_end, p2_start, p2_end,
+                show_progress=show_progress
+            )
+        elif multi_list:
             final_md, data_rows = generate_multi_range_report(
                 multi_list, pages, show_progress=show_progress
             )
@@ -1780,6 +2561,20 @@ def main() -> None:
             final_md, data_rows = generate_full_report(
                 pages, show_progress=show_progress
             )
+
+        # Show threshold alerts if requested
+        if args.alerts and data_rows:
+            all_alerts = []
+            for row in data_rows:
+                alerts = get_threshold_alerts(row)
+                all_alerts.extend(alerts)
+
+            if all_alerts:
+                print()
+                print_warning("Threshold Alerts:")
+                for alert in all_alerts:
+                    print(f"  {Colors.warning('⚠')} {alert}")
+                print()
 
         # Handle output format
         output_file = args.output
@@ -1793,6 +2588,10 @@ def main() -> None:
             if not output_file.endswith(".csv"):
                 output_file = output_file.rsplit(".", 1)[0] + ".csv"
             export_to_csv(data_rows, output_file)
+        elif output_format == "html":
+            if not output_file.endswith(".html"):
+                output_file = output_file.rsplit(".", 1)[0] + ".html"
+            export_to_html(data_rows, final_md, output_file)
         else:  # markdown
             with open(output_file, "w", encoding="utf-8") as f:
                 f.write(final_md)

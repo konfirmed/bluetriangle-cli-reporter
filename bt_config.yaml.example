@@ -1,0 +1,47 @@
+# Blue Triangle CLI Reporter Configuration
+# Copy this file to bt_config.yaml and customize as needed.
+# Environment variables take precedence over this config file.
+
+# API Configuration
+api:
+  # Your Blue Triangle account email
+  email: your@email.com
+
+  # Your Blue Triangle API key (from Dashboard > Settings > API Keys)
+  key: your_api_key_here
+
+  # Your site prefix (from your Blue Triangle dashboard URL)
+  site_prefix: your_site_prefix
+
+  # Request timeout in seconds (default: 30)
+  timeout: 30
+
+# Caching Configuration
+cache:
+  # Enable API response caching (default: false)
+  enabled: false
+
+  # Cache time-to-live in seconds (default: 3600 = 1 hour)
+  ttl: 3600
+
+# Performance Thresholds for Alerts
+# Values are in milliseconds (except CLS which is unitless)
+# Uses Web Vitals recommendations by default
+thresholds:
+  # Largest Contentful Paint - good < 2500ms, poor > 4000ms
+  LCP: 2500
+
+  # Total Blocking Time - good < 200ms, poor > 600ms
+  TBT: 200
+
+  # Cumulative Layout Shift - good < 0.1, poor > 0.25
+  CLS: 0.1
+
+  # Interaction to Next Paint - good < 200ms, poor > 500ms
+  INP: 200
+
+  # First Byte (TTFB) - good < 800ms, poor > 1800ms
+  FB: 800
+
+  # Page onload time threshold in ms
+  onload: 3000
