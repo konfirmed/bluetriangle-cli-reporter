@@ -42,13 +42,15 @@ python bt_insights.py --page pdp checkout --time-range 7d --output report.md
 
 ## 🔐 Configuration
 
-Before running the CLI, open the script and set your credentials in the config section at the top:
+Create a `.env` file in the project root with your Blue Triangle credentials:
 
-```python
-EMAIL = "your@email.com"
-API_KEY = "your_api_key"
-SITE_PREFIX = "your_site_prefix"
+```bash
+BT_API_EMAIL=your@email.com
+BT_API_KEY=your_api_key
+BT_SITE_PREFIX=your_site_prefix
 ```
+
+Alternatively, you can set these as environment variables directly in your shell.
 
 ---
 
