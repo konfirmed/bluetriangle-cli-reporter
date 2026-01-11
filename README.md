@@ -168,6 +168,31 @@ python bt_insights.py --page pdp --config my_config.yaml
 # Default locations searched: bt_config.yaml, ~/.bt_config.yaml
 ```
 
+Example `bt_config.yaml`:
+
+```yaml
+api:
+  email: your-email@example.com
+  key: your-api-key
+  site_prefix: your-site
+  timeout: 30
+
+cache:
+  enabled: true
+  ttl: 300
+
+analysis:
+  percentile: 90        # Options: 50, 75, 90, 95, 99
+  data_type: rum        # Options: rum, synthetic, native, basepage
+  resource_group: domain  # Options: domain, file, service
+
+thresholds:
+  LCP: 2500
+  TBT: 200
+  CLS: 0.1
+  INP: 200
+```
+
 ### Threshold Alerts
 
 ```bash

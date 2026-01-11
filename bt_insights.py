@@ -331,6 +331,7 @@ def apply_config(config: dict[str, Any]) -> None:
         config: Configuration dictionary.
     """
     global SITE_PREFIX, REQUEST_TIMEOUT, alert_thresholds, cache_enabled, CACHE_TTL
+    global selected_percentiles, selected_data_type, resource_group_by
 
     # API settings
     if "api" in config:
@@ -357,6 +358,22 @@ def apply_config(config: dict[str, Any]) -> None:
     # Alert thresholds
     if "thresholds" in config:
         alert_thresholds = config["thresholds"]
+
+    # Analysis settings
+    if "analysis" in config:
+        analysis_config = config["analysis"]
+        if "percentile" in analysis_config:
+            p = int(analysis_config["percentile"])
+            if p in [50, 75, 90, 95, 99]:
+                selected_percentiles = [p]
+        if "data_type" in analysis_config:
+            dt = analysis_config["data_type"]
+            if dt in ["rum", "synthetic", "native", "basepage"]:
+                selected_data_type = dt
+        if "resource_group" in analysis_config:
+            rg = analysis_config["resource_group"]
+            if rg in ["domain", "file", "service"]:
+                resource_group_by = rg
 
 
 # ==================
@@ -1894,7 +1911,7 @@ def get_js_errors(page_name: str) -> str:
         "site": SITE_PREFIX,
         "start": one_day_ago,
         "end": now,
-        "dataType": "rum",
+        "dataType": selected_data_type,
         "dataColumns": ["errorCount"],
         "pageName": page_name,
         "group": ["time", "errorConstructor"],
@@ -2051,7 +2068,7 @@ def get_performance_hits(page_name: str) -> str:
         "site": SITE_PREFIX,
         "start": one_day_ago,
         "end": now,
-        "dataType": "rum",
+        "dataType": selected_data_type,
         "dataColumns": ["measurementTime", "httpCode", "url"],
         "pageName[]": [page_name],
         "limit": 1000,
@@ -2357,6 +2374,20 @@ def generate_full_report(
 
     summary_table = make_summary_table(table_rows)
     big_md = "# 🔍 Blue Triangle API Report\n\n"
+
+    # Add analysis settings info
+    settings_parts = []
+    if selected_percentiles:
+        settings_parts.append(f"**Percentile:** p{selected_percentiles[0]}")
+    else:
+        settings_parts.append("**Metric:** Average")
+    if selected_data_type != "rum":
+        settings_parts.append(f"**Data Type:** {selected_data_type.upper()}")
+    if resource_group_by != "domain":
+        settings_parts.append(f"**Resource Grouping:** {resource_group_by}")
+    if settings_parts:
+        big_md += "> " + " | ".join(settings_parts) + "\n\n"
+
     big_md += "## Overall Summary Table\n"
     big_md += summary_table
 

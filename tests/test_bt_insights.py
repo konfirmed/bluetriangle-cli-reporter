@@ -1155,6 +1155,98 @@ class TestAdvancedCLIArguments:
             sys.argv = old_argv
 
 
+class TestConfigFileAnalysisSettings:
+    """Tests for YAML config file analysis settings support."""
+
+    def test_apply_config_percentile(self):
+        """Test that apply_config sets percentile from config."""
+        # Reset to default
+        bt_insights.selected_percentiles = None
+
+        config = {"analysis": {"percentile": 90}}
+        bt_insights.apply_config(config)
+
+        assert bt_insights.selected_percentiles == [90]
+        # Reset
+        bt_insights.selected_percentiles = None
+
+    def test_apply_config_data_type(self):
+        """Test that apply_config sets data_type from config."""
+        # Reset to default
+        bt_insights.selected_data_type = "rum"
+
+        config = {"analysis": {"data_type": "synthetic"}}
+        bt_insights.apply_config(config)
+
+        assert bt_insights.selected_data_type == "synthetic"
+        # Reset
+        bt_insights.selected_data_type = "rum"
+
+    def test_apply_config_resource_group(self):
+        """Test that apply_config sets resource_group from config."""
+        # Reset to default
+        bt_insights.resource_group_by = "domain"
+
+        config = {"analysis": {"resource_group": "file"}}
+        bt_insights.apply_config(config)
+
+        assert bt_insights.resource_group_by == "file"
+        # Reset
+        bt_insights.resource_group_by = "domain"
+
+    def test_apply_config_all_analysis_settings(self):
+        """Test that apply_config sets all analysis settings."""
+        # Reset to defaults
+        bt_insights.selected_percentiles = None
+        bt_insights.selected_data_type = "rum"
+        bt_insights.resource_group_by = "domain"
+
+        config = {
+            "analysis": {
+                "percentile": 95,
+                "data_type": "basepage",
+                "resource_group": "service"
+            }
+        }
+        bt_insights.apply_config(config)
+
+        assert bt_insights.selected_percentiles == [95]
+        assert bt_insights.selected_data_type == "basepage"
+        assert bt_insights.resource_group_by == "service"
+
+        # Reset
+        bt_insights.selected_percentiles = None
+        bt_insights.selected_data_type = "rum"
+        bt_insights.resource_group_by = "domain"
+
+    def test_apply_config_invalid_percentile_ignored(self):
+        """Test that invalid percentile values are ignored."""
+        bt_insights.selected_percentiles = None
+
+        config = {"analysis": {"percentile": 80}}  # Invalid value
+        bt_insights.apply_config(config)
+
+        assert bt_insights.selected_percentiles is None
+
+    def test_apply_config_invalid_data_type_ignored(self):
+        """Test that invalid data_type values are ignored."""
+        bt_insights.selected_data_type = "rum"
+
+        config = {"analysis": {"data_type": "invalid"}}
+        bt_insights.apply_config(config)
+
+        assert bt_insights.selected_data_type == "rum"
+
+    def test_apply_config_invalid_resource_group_ignored(self):
+        """Test that invalid resource_group values are ignored."""
+        bt_insights.resource_group_by = "domain"
+
+        config = {"analysis": {"resource_group": "invalid"}}
+        bt_insights.apply_config(config)
+
+        assert bt_insights.resource_group_by == "domain"
+
+
 class TestShellCompletionEnhancements:
     """Tests for shell completion script enhancements."""
 
