@@ -1313,7 +1313,7 @@ def fetch_top_page_names(
         "end": end,
         "dataColumns": ["pageViews"],
         "group": ["pageName"],
-        "limit": limit,
+        "limit": limit * 10,  # Fetch more to ensure we get enough unique pages
         "orderBy": [{"field": "pageViews", "direction": "DESC"}],
     }
 
