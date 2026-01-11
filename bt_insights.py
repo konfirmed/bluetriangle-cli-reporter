@@ -2926,6 +2926,224 @@ def get_cost_trend(page_name: str) -> str:
     return output
 
 
+def generate_friction_summary(pages: list[str], show_progress: bool = True) -> str:
+    """Generate an executive friction summary.
+
+    Shows total revenue at risk, top friction points, quick wins,
+    and pages that need attention (getting worse).
+
+    Args:
+        pages: List of page names to analyze.
+        show_progress: Whether to show progress messages.
+
+    Returns:
+        Formatted friction summary string.
+    """
+    global selected_time_range_days, now, selected_data_type
+
+    if show_progress:
+        print_info("Generating friction summary...")
+
+    # Get revenue opportunity date
+    report_date = get_latest_revenue_opportunity_date()
+    if not report_date:
+        return "⚠️ No revenue data available for friction summary.\n"
+
+    # Fetch revenue opportunity data
+    params: dict[str, Any] = {
+        "prefix": SITE_PREFIX,
+        "salesType": "revenue",
+        "reportDate": report_date,
+    }
+
+    opp_data = fetch_data(ENDPOINTS["revenue_opportunity"], method="GET", params=params)
+    if not opp_data:
+        return "⚠️ No revenue data available.\n"
+
+    days = selected_time_range_days if selected_time_range_days > 0 else 1.0
+
+    # Collect page costs and device breakdowns
+    page_data: dict[str, dict[str, Any]] = {}
+
+    for page_name in pages:
+        total_cost = 0.0
+        device_costs: dict[str, float] = {}
+
+        for device in ["Desktop", "Mobile", "Tablet"]:
+            dev_data = opp_data.get(device)
+            if not dev_data:
+                continue
+
+            revenue_section = dev_data.get("revenue", {})
+            if page_name not in revenue_section:
+                continue
+
+            page_rev_data = revenue_section[page_name]
+            try:
+                speed_data = page_rev_data.get("speedUpByXData", page_rev_data.get("speedUpToXData", {}))
+                if speed_data and "lostRevenue" in speed_data:
+                    arr = speed_data["lostRevenue"]
+                    if arr and len(arr) > 0:
+                        device_cost = float(arr[-1]) / days
+                        device_costs[device.lower()] = device_cost
+                        total_cost += device_cost
+            except (ValueError, TypeError, KeyError):
+                pass
+
+        if total_cost > 0:
+            page_data[page_name] = {
+                "cost": total_cost,
+                "devices": device_costs,
+                "trend": None,
+                "trend_diff": 0,
+                "trend_pct": 0,
+            }
+
+    if not page_data:
+        return "⚠️ No page cost data available for friction summary.\n"
+
+    # Calculate trends for each page
+    if show_progress:
+        print_info("Analyzing cost trends...")
+
+    for page_name in page_data:
+        if now is None:
+            continue
+
+        # Compare this week vs last week
+        periods = [
+            ("this_week", now - 604800, now),
+            ("last_week", now - 1209600, now - 604800),
+        ]
+
+        period_costs: dict[str, float] = {}
+
+        for period_name, start_ts, end_ts in periods:
+            payload: dict[str, Any] = {
+                "site": SITE_PREFIX,
+                "start": start_ts,
+                "end": end_ts,
+                "dataType": selected_data_type,
+                "dataColumns": ["largestContentfulPaint", "totalBlockingTime"],
+                "group": ["pageName"],
+                "pageName": page_name,
+            }
+
+            data = fetch_data(ENDPOINTS["performance"], payload)
+            if not validate_api_response(data, "data"):
+                continue
+
+            df = pd.DataFrame(data["data"])
+            if df.empty:
+                continue
+
+            row = df.iloc[0]
+            lcp = _to_float(row.get("largestContentfulPaint", 0)) or 0
+            tbt = _to_float(row.get("totalBlockingTime", 0)) or 0
+            total_time = lcp + tbt
+
+            revenue_curve = get_revenue_curve_for_page(page_name)
+            if revenue_curve:
+                baseline = 1100
+                delta_from_optimal = total_time - baseline
+                if delta_from_optimal > 0:
+                    cost = estimate_resource_cost_impact(delta_from_optimal, revenue_curve)
+                    period_costs[period_name] = cost
+
+        if "this_week" in period_costs and "last_week" in period_costs:
+            current = period_costs["this_week"]
+            previous = period_costs["last_week"]
+            diff = current - previous
+
+            if previous > 0:
+                pct = ((current - previous) / previous) * 100
+                if diff > 0:
+                    page_data[page_name]["trend"] = "worse"
+                elif diff < 0:
+                    page_data[page_name]["trend"] = "better"
+                else:
+                    page_data[page_name]["trend"] = "stable"
+                page_data[page_name]["trend_diff"] = diff
+                page_data[page_name]["trend_pct"] = pct
+
+    # Sort pages by cost
+    sorted_pages = sorted(page_data.items(), key=lambda x: x[1]["cost"], reverse=True)
+    total_cost = sum(p["cost"] for p in page_data.values())
+
+    # Identify quick wins (improving) and watch list (getting worse)
+    improving = [(p, d) for p, d in sorted_pages if d["trend"] == "better"]
+    worsening = [(p, d) for p, d in sorted_pages if d["trend"] == "worse"]
+
+    # Build summary output
+    output = "\n"
+    output += "━" * 50 + "\n"
+    output += "📊 FRICTION SUMMARY\n"
+    output += "━" * 50 + "\n\n"
+
+    # Total at risk
+    output += f"💰 **Total Daily Revenue at Risk**: ~${total_cost:,.0f}/day\n\n"
+
+    # Top friction points
+    output += "🔴 **Top Friction Points:**\n"
+    for i, (page, data) in enumerate(sorted_pages[:5], 1):
+        pct = (data["cost"] / total_cost * 100) if total_cost > 0 else 0
+        devices = data.get("devices", {})
+        top_device = max(devices.items(), key=lambda x: x[1])[0] if devices else ""
+        top_device_pct = (devices.get(top_device, 0) / data["cost"] * 100) if data["cost"] > 0 else 0
+
+        line = f"   {i}. **{page}**: ~${data['cost']:,.0f}/day ({pct:.0f}%)"
+
+        if top_device and top_device_pct > 50:
+            line += f" [{top_device}: {top_device_pct:.0f}%]"
+
+        if data["trend"] == "worse":
+            line += f" ⚠️ +{data['trend_pct']:.0f}%"
+        elif data["trend"] == "better":
+            line += f" ✅ {data['trend_pct']:.0f}%"
+
+        output += line + "\n"
+
+    output += "\n"
+
+    # Quick wins
+    if improving:
+        output += "🟢 **Quick Wins (Improving):**\n"
+        for page, data in improving[:3]:
+            output += f"   - **{page}**: {data['trend_pct']:.0f}% (-${abs(data['trend_diff']):,.0f}/day)\n"
+        output += "\n"
+
+    # Watch list
+    if worsening:
+        output += "⚠️ **Watch List (Getting Worse):**\n"
+        for page, data in worsening[:3]:
+            output += f"   - **{page}**: +{data['trend_pct']:.0f}% (+${data['trend_diff']:,.0f}/day)\n"
+        output += "\n"
+
+    # Device summary
+    all_devices: dict[str, float] = {"mobile": 0, "desktop": 0, "tablet": 0}
+    for page, data in page_data.items():
+        for device, cost in data.get("devices", {}).items():
+            if device in all_devices:
+                all_devices[device] += cost
+
+    total_device = sum(all_devices.values())
+    if total_device > 0:
+        output += "📱 **Device Impact:**\n"
+        sorted_devices = sorted(all_devices.items(), key=lambda x: x[1], reverse=True)
+        icons = {"mobile": "📱", "desktop": "💻", "tablet": "📟"}
+        for device, cost in sorted_devices:
+            pct = (cost / total_device * 100) if total_device > 0 else 0
+            icon = icons.get(device, "")
+            output += f"   {icon} {device.capitalize()}: ~${cost:,.0f}/day ({pct:.0f}%)\n"
+        output += "\n"
+
+    output += "━" * 50 + "\n"
+    output += "Run full report: python bt_insights.py --top-pages --time-range 28d\n"
+    output += "━" * 50 + "\n"
+
+    return output
+
+
 def get_resource_file_analysis(page_name: str) -> str:
     """Analyze specific resource files matching the filter pattern.
 
@@ -3871,6 +4089,11 @@ Environment Variables:
         default=None,
         help="Filter and analyze specific resource files (supports wildcards, e.g., 'chunk.273*.js')",
     )
+    advanced_group.add_argument(
+        "--summary",
+        action="store_true",
+        help="Show executive friction summary: total revenue at risk, top issues, quick wins, and watch list",
+    )
 
     # Utility options
     util_group = parser.add_argument_group("Utility Options")
@@ -3922,7 +4145,7 @@ _bt_insights_completions() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    opts="--page --top-pages --time-range --start --end --multi-range --compare --output --format --metrics --slack-webhook --teams-webhook --email-to --email-subject --email-attach --config --cache --clear-cache --alerts --generate-completion --percentile --data-type --resource-group --test-connection --no-color --quiet --verbose --dry-run --help"
+    opts="--page --top-pages --time-range --start --end --multi-range --compare --output --format --metrics --slack-webhook --teams-webhook --email-to --email-subject --email-attach --config --cache --clear-cache --alerts --generate-completion --percentile --data-type --resource-group --resource-file --summary --test-connection --no-color --quiet --verbose --dry-run --help"
 
     case "${prev}" in
         --time-range)
@@ -4013,6 +4236,8 @@ _bt_insights() {
         '--percentile[Use percentile instead of average]:percentile:($percentiles)' \\
         '--data-type[Data type for queries]:type:($data_types)' \\
         '--resource-group[Group resources by]:grouping:($resource_groups)' \\
+        '--resource-file[Filter resource files]:pattern:' \\
+        '--summary[Show executive friction summary]' \\
         '--test-connection[Test API connection]' \\
         '--no-color[Disable colors]' \\
         {-q,--quiet}'[Suppress progress]' \\
@@ -4229,6 +4454,26 @@ def main() -> None:
         pages = update_available_pages(limit=20)
         if show_progress:
             print_success(f"Found {len(pages)} pages")
+
+    # Handle --summary mode
+    if args.summary:
+        try:
+            summary = generate_friction_summary(pages, show_progress=show_progress)
+            print(summary)
+            elapsed_time = time.time() - start_time
+            if show_progress:
+                print_info(f"Summary generated in {elapsed_time:.1f}s")
+            sys.exit(0)
+        except KeyboardInterrupt:
+            print()
+            print_warning("Operation cancelled by user")
+            sys.exit(130)
+        except Exception as e:
+            print_error(f"Error generating summary: {e}")
+            if args.verbose:
+                import traceback
+                traceback.print_exc()
+            sys.exit(1)
 
     # Generate report
     try:
