@@ -1050,6 +1050,7 @@ def test_api_connection() -> tuple[bool, str]:
             "site": SITE_PREFIX,
             "start": int(time.time()) - 86400,
             "end": int(time.time()),
+            "dataType": "rum",  # Default for connection test
             "dataColumns": ["pageViews"],
             "group": ["pageName"],
             "limit": 1,
@@ -1301,7 +1302,7 @@ def fetch_top_page_names(
     Returns:
         DataFrame with page names and views.
     """
-    global now, one_day_ago
+    global now, one_day_ago, selected_data_type
     if start is None:
         start = one_day_ago if one_day_ago is not None else int(time.time()) - 86400
     if end is None:
@@ -1311,6 +1312,7 @@ def fetch_top_page_names(
         "site": SITE_PREFIX,
         "start": start,
         "end": end,
+        "dataType": selected_data_type,
         "dataColumns": ["pageViews"],
         "group": ["pageName"],
         "limit": limit * 10,  # Fetch more to ensure we get enough unique pages
@@ -2000,7 +2002,7 @@ def get_resource_data(page_name: str, compare_previous: bool = True) -> str:
     Returns:
         Markdown formatted resource report.
     """
-    global now, one_day_ago, two_days_ago
+    global now, one_day_ago, two_days_ago, selected_data_type, resource_group_by
 
     # Use configured resource grouping (domain, file, or service)
     group_col = resource_group_by
@@ -2009,6 +2011,7 @@ def get_resource_data(page_name: str, compare_previous: bool = True) -> str:
         "site": SITE_PREFIX,
         "start": one_day_ago,
         "end": now,
+        "dataType": selected_data_type,
         "dataColumns": ["duration", "elementCount"],
         "group": [group_col],
         "pageName[]": [page_name],
