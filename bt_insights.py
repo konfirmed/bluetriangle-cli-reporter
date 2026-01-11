@@ -3406,11 +3406,10 @@ def main() -> None:
         if show_progress:
             print_success(f"Found {len(pages)} pages")
     elif args.page:
-        pages = validate_pages(args.page, AVAILABLE_PAGES)
-        if pages is None:
-            print_error("No valid pages specified")
-            print_info("Check page names and try again")
-            sys.exit(1)
+        # Trust user-provided page names - API will return empty data if invalid
+        pages = args.page
+        if show_progress:
+            print_info(f"Analyzing {len(pages)} page(s): {', '.join(pages)}")
     else:
         if show_progress:
             print_info("Fetching available pages...")
