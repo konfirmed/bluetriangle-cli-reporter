@@ -2547,6 +2547,361 @@ def get_page_revenue(page_name: str) -> str:
     return text
 
 
+# ========== ADVANCED COST ANALYSIS ==========
+
+
+def get_metric_cost_breakdown(page_name: str) -> str:
+    """Calculate cost impact per Core Web Vital metric.
+
+    Estimates how much each metric's degradation is costing by correlating
+    timing changes with the revenue opportunity curve.
+
+    Args:
+        page_name: Name of the page to analyze.
+
+    Returns:
+        Markdown formatted metric cost breakdown.
+    """
+    global now, one_day_ago, two_days_ago, selected_data_type
+
+    # Fetch current and previous performance data
+    payload: dict[str, Any] = {
+        "site": SITE_PREFIX,
+        "start": one_day_ago,
+        "end": now,
+        "dataType": selected_data_type,
+        "dataColumns": [
+            "largestContentfulPaint", "totalBlockingTime",
+            "cumulativeLayoutShift", "intToNextPaint", "firstByte",
+        ],
+        "group": ["pageName"],
+        "pageName": page_name,
+    }
+
+    if selected_percentiles:
+        payload["avgType"] = "percentile"
+        payload["percentile"] = selected_percentiles
+
+    prev_payload = dict(payload)
+    if two_days_ago is not None:
+        prev_payload["start"] = two_days_ago
+        prev_payload["end"] = one_day_ago
+
+    data_curr = fetch_data(ENDPOINTS["performance"], payload)
+    data_prev = fetch_data(ENDPOINTS["performance"], prev_payload) if two_days_ago else None
+
+    if not validate_api_response(data_curr, "data"):
+        return "> ⚠️ No metric data available for cost analysis.\n"
+
+    df_curr = pd.DataFrame(data_curr["data"])
+    df_prev = pd.DataFrame(data_prev["data"]) if data_prev and validate_api_response(data_prev, "data") else pd.DataFrame()
+
+    if df_curr.empty:
+        return "> ⚠️ No metric data available.\n"
+
+    # Get revenue curve for cost estimation
+    revenue_curve = get_revenue_curve_for_page(page_name)
+    if not revenue_curve:
+        return "> ⚠️ No revenue data available for metric cost analysis.\n"
+
+    # Metric mappings
+    metrics = {
+        "LCP": "largestContentfulPaint",
+        "TBT": "totalBlockingTime",
+        "INP": "intToNextPaint",
+        "TTFB": "firstByte",
+    }
+    # CLS is a ratio, not milliseconds - handle separately
+    cls_col = "cumulativeLayoutShift"
+
+    curr_row = df_curr.iloc[0] if not df_curr.empty else {}
+    prev_row = df_prev.iloc[0] if not df_prev.empty else {}
+
+    metric_costs: list[tuple[str, float, float]] = []  # (name, delta_ms, cost)
+
+    for metric_name, col_name in metrics.items():
+        curr_val = _to_float(curr_row.get(col_name, 0)) or 0
+        prev_val = _to_float(prev_row.get(col_name, 0)) or 0 if not df_prev.empty else curr_val
+
+        delta_ms = curr_val - prev_val
+        cost = estimate_resource_cost_impact(delta_ms, revenue_curve)
+        metric_costs.append((metric_name, delta_ms, cost))
+
+    # Handle CLS separately (multiply by 1000 to convert to pseudo-ms for cost calc)
+    curr_cls = _to_float(curr_row.get(cls_col, 0)) or 0
+    prev_cls = _to_float(prev_row.get(cls_col, 0)) or 0 if not df_prev.empty else curr_cls
+    cls_delta = (curr_cls - prev_cls) * 1000  # Scale up for cost calculation
+    cls_cost = estimate_resource_cost_impact(cls_delta, revenue_curve)
+    metric_costs.append(("CLS", cls_delta / 1000, cls_cost))  # Store original delta
+
+    # Sort by absolute cost (highest impact first)
+    metric_costs.sort(key=lambda x: abs(x[2]), reverse=True)
+
+    output = "### 📊 Metric Cost Breakdown\n"
+    output += "*Which Core Web Vital is costing you the most?*\n\n"
+
+    total_cost = 0.0
+    for metric_name, delta, cost in metric_costs:
+        total_cost += cost
+        if metric_name == "CLS":
+            delta_str = f"{'+' if delta > 0 else ''}{delta:.4f}"
+        else:
+            delta_str = f"{'+' if delta > 0 else ''}{delta:.0f}ms"
+
+        if abs(cost) >= 1:
+            if cost > 0:
+                output += f"- **{metric_name}**: {delta_str} → ~${cost:,.0f}/day cost\n"
+            else:
+                output += f"- **{metric_name}**: {delta_str} → ~${abs(cost):,.0f}/day savings\n"
+        else:
+            output += f"- **{metric_name}**: {delta_str} (minimal impact)\n"
+
+    if abs(total_cost) >= 1:
+        output += f"\n**Total metric impact**: ~${abs(total_cost):,.0f}/day "
+        output += "cost\n" if total_cost > 0 else "savings\n"
+
+    return output
+
+
+def get_device_cost_breakdown(page_name: str) -> str:
+    """Calculate cost impact by device type (Desktop, Mobile, Tablet).
+
+    Args:
+        page_name: Name of the page to analyze.
+
+    Returns:
+        Markdown formatted device cost breakdown.
+    """
+    report_date = get_latest_revenue_opportunity_date()
+    if not report_date:
+        return "> ⚠️ No revenue data available for device breakdown.\n"
+
+    params: dict[str, Any] = {
+        "prefix": SITE_PREFIX,
+        "salesType": "revenue",
+        "reportDate": report_date,
+        "pageName[]": [page_name],
+    }
+
+    opp_data = fetch_data(ENDPOINTS["revenue_opportunity"], method="GET", params=params)
+    if not opp_data:
+        return "> ⚠️ No device revenue data available.\n"
+
+    device_costs: list[tuple[str, float]] = []
+
+    for device in ["Mobile", "Desktop", "Tablet"]:
+        dev_data = opp_data.get(device)
+        if not dev_data:
+            continue
+
+        revenue_section = dev_data.get("revenue", {})
+        if page_name not in revenue_section:
+            continue
+
+        page_data = revenue_section[page_name]
+        lost_revenue = 0.0
+
+        try:
+            speed_data = page_data.get("speedUpByXData", page_data.get("speedUpToXData", {}))
+            if speed_data and "lostRevenue" in speed_data:
+                arr = speed_data["lostRevenue"]
+                if arr and len(arr) > 0:
+                    lost_revenue = float(arr[-1])
+        except (ValueError, TypeError, KeyError):
+            lost_revenue = 0.0
+
+        if lost_revenue > 0:
+            device_costs.append((device, lost_revenue))
+
+    if not device_costs:
+        return "> ⚠️ No device-specific cost data available.\n"
+
+    # Sort by cost (highest first)
+    device_costs.sort(key=lambda x: x[1], reverse=True)
+    total_cost = sum(c[1] for c in device_costs)
+
+    output = "### 📱 Device Cost Breakdown\n"
+    output += "*Where is performance costing you the most?*\n\n"
+
+    for device, cost in device_costs:
+        pct = (cost / total_cost * 100) if total_cost > 0 else 0
+        emoji = {"Mobile": "📱", "Desktop": "💻", "Tablet": "📟"}.get(device, "📊")
+        output += f"- {emoji} **{device}**: ~${cost:,.0f}/day ({pct:.0f}%)\n"
+
+    output += f"\n**Total**: ~${total_cost:,.0f}/day\n"
+
+    return output
+
+
+def get_page_cost_ranking(pages: list[str]) -> str:
+    """Rank pages by revenue impact (highest cost first).
+
+    Args:
+        pages: List of page names to analyze.
+
+    Returns:
+        Markdown formatted page cost ranking.
+    """
+    report_date = get_latest_revenue_opportunity_date()
+    if not report_date:
+        return "> ⚠️ No revenue data available for page ranking.\n"
+
+    params: dict[str, Any] = {
+        "prefix": SITE_PREFIX,
+        "salesType": "revenue",
+        "reportDate": report_date,
+    }
+
+    opp_data = fetch_data(ENDPOINTS["revenue_opportunity"], method="GET", params=params)
+    if not opp_data:
+        return "> ⚠️ No revenue data available.\n"
+
+    page_costs: dict[str, float] = {}
+
+    for page_name in pages:
+        total_cost = 0.0
+        for device in ["Desktop", "Mobile", "Tablet"]:
+            dev_data = opp_data.get(device)
+            if not dev_data:
+                continue
+
+            revenue_section = dev_data.get("revenue", {})
+            if page_name not in revenue_section:
+                continue
+
+            page_data = revenue_section[page_name]
+            try:
+                speed_data = page_data.get("speedUpByXData", page_data.get("speedUpToXData", {}))
+                if speed_data and "lostRevenue" in speed_data:
+                    arr = speed_data["lostRevenue"]
+                    if arr and len(arr) > 0:
+                        total_cost += float(arr[-1])
+            except (ValueError, TypeError, KeyError):
+                pass
+
+        if total_cost > 0:
+            page_costs[page_name] = total_cost
+
+    if not page_costs:
+        return "> ⚠️ No page cost data available.\n"
+
+    # Sort by cost (highest first) and take top 10
+    sorted_pages = sorted(page_costs.items(), key=lambda x: x[1], reverse=True)[:10]
+    total_all = sum(page_costs.values())
+
+    output = "### 🏆 Top Costly Pages\n"
+    output += "*Pages with highest revenue impact from performance*\n\n"
+
+    for i, (page, cost) in enumerate(sorted_pages, 1):
+        pct = (cost / total_all * 100) if total_all > 0 else 0
+        output += f"{i}. **{page}**: ~${cost:,.0f}/day ({pct:.0f}%)\n"
+
+    output += f"\n**Total across all pages**: ~${total_all:,.0f}/day\n"
+
+    return output
+
+
+def get_cost_trend(page_name: str) -> str:
+    """Calculate cost trend over multiple time periods.
+
+    Compares performance costs across different time ranges to show
+    if things are getting better or worse.
+
+    Args:
+        page_name: Name of the page to analyze.
+
+    Returns:
+        Markdown formatted cost trend analysis.
+    """
+    global now, selected_data_type
+
+    if now is None:
+        return "> ⚠️ Time range not configured for trend analysis.\n"
+
+    # Define time periods to compare (in seconds)
+    periods = [
+        ("Today", 86400),       # Last 24 hours
+        ("This Week", 604800),  # Last 7 days
+        ("Last Week", 604800),  # 7-14 days ago
+    ]
+
+    period_costs: list[tuple[str, float]] = []
+
+    for period_name, duration in periods:
+        if period_name == "Last Week":
+            end_ts = now - 604800  # Start from 7 days ago
+            start_ts = end_ts - duration
+        else:
+            end_ts = now
+            start_ts = now - duration
+
+        # Fetch performance data for this period
+        payload: dict[str, Any] = {
+            "site": SITE_PREFIX,
+            "start": start_ts,
+            "end": end_ts,
+            "dataType": selected_data_type,
+            "dataColumns": ["largestContentfulPaint", "totalBlockingTime"],
+            "group": ["pageName"],
+            "pageName": page_name,
+        }
+
+        data = fetch_data(ENDPOINTS["performance"], payload)
+        if not validate_api_response(data, "data"):
+            continue
+
+        df = pd.DataFrame(data["data"])
+        if df.empty:
+            continue
+
+        # Get average LCP + TBT as a proxy for "total slowness"
+        row = df.iloc[0]
+        lcp = _to_float(row.get("largestContentfulPaint", 0)) or 0
+        tbt = _to_float(row.get("totalBlockingTime", 0)) or 0
+        total_time = lcp + tbt
+
+        # Get revenue curve to estimate cost
+        revenue_curve = get_revenue_curve_for_page(page_name)
+        if revenue_curve:
+            # Use the timing as a proxy for "how far from optimal"
+            # Assume optimal is 1000ms LCP + 100ms TBT = 1100ms baseline
+            baseline = 1100
+            delta_from_optimal = total_time - baseline
+            if delta_from_optimal > 0:
+                cost = estimate_resource_cost_impact(delta_from_optimal, revenue_curve)
+                period_costs.append((period_name, cost))
+            else:
+                period_costs.append((period_name, 0))
+
+    if len(period_costs) < 2:
+        return "> ⚠️ Insufficient data for trend analysis.\n"
+
+    output = "### 📈 Cost Trend\n"
+    output += "*Is performance costing you more or less over time?*\n\n"
+
+    for period_name, cost in period_costs:
+        output += f"- **{period_name}**: ~${cost:,.0f}/day\n"
+
+    # Calculate trend
+    if len(period_costs) >= 2:
+        current = period_costs[0][1]  # Today/This Week
+        previous = period_costs[-1][1]  # Last Week
+
+        if previous > 0:
+            change_pct = ((current - previous) / previous) * 100
+            diff = current - previous
+
+            output += "\n"
+            if diff > 0:
+                output += f"⚠️ **Trend**: Getting worse (+${diff:,.0f}/day, +{change_pct:.0f}%)\n"
+            elif diff < 0:
+                output += f"✅ **Trend**: Improving (-${abs(diff):,.0f}/day, {change_pct:.0f}%)\n"
+            else:
+                output += "➡️ **Trend**: Stable\n"
+
+    return output
+
+
 # ========== BUILD PAGE REPORT ==========
 
 
@@ -2565,6 +2920,12 @@ def build_page_report(page_name: str) -> str:
     text += get_resource_data(page_name, compare_previous=True) + "\n\n"
     text += get_page_revenue(page_name) + "\n\n"
     text += get_revenue_opportunity(page_name) + "\n\n"
+
+    # Advanced cost analysis sections
+    text += get_metric_cost_breakdown(page_name) + "\n\n"
+    text += get_device_cost_breakdown(page_name) + "\n\n"
+    text += get_cost_trend(page_name) + "\n\n"
+
     return text
 
 
@@ -2670,6 +3031,10 @@ def generate_full_report(
 
     big_md += "## Overall Summary Table\n"
     big_md += summary_table
+
+    # Add page cost ranking for multi-page reports
+    if len(pages) > 1:
+        big_md += "\n" + get_page_cost_ranking(pages) + "\n"
 
     if show_progress:
         print_info("Building detailed page reports...")
