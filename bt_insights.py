@@ -2179,14 +2179,19 @@ def get_revenue_opportunity(
         device_lost_revenue = 0.0
 
         try:
-            if "speedUpToXData" in page_data and "lostRevenue" in page_data["speedUpToXData"]:
-                arr = page_data["speedUpToXData"]["lostRevenue"]
-                if arr and len(arr) > 0:
-                    device_lost_revenue += float(arr[-1])
+            # Get lost revenue from speedUpByXData (relative improvement model)
+            # Note: speedUpToXData and speedUpByXData are alternative calculations,
+            # not cumulative. We use speedUpByXData as it shows potential if page
+            # were X% faster, which is the more commonly referenced metric.
             if "speedUpByXData" in page_data and "lostRevenue" in page_data["speedUpByXData"]:
                 arr = page_data["speedUpByXData"]["lostRevenue"]
                 if arr and len(arr) > 0:
-                    device_lost_revenue += float(arr[-1])
+                    device_lost_revenue = float(arr[-1])
+            # Fallback to speedUpToXData if speedUpByXData not available
+            elif "speedUpToXData" in page_data and "lostRevenue" in page_data["speedUpToXData"]:
+                arr = page_data["speedUpToXData"]["lostRevenue"]
+                if arr and len(arr) > 0:
+                    device_lost_revenue = float(arr[-1])
         except (ValueError, TypeError, KeyError) as exc:
             logger.error("Error converting lost revenue values: %s", exc)
             device_lost_revenue = 0.0
