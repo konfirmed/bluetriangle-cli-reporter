@@ -1324,7 +1324,59 @@ def fetch_top_page_names(
     logger.debug("Top pages response: %s", data)
 
     if validate_api_response(data, "data"):
-        return pd.DataFrame(data["data"])
+        df = pd.DataFrame(data["data"])
+        # Filter out aggregate entries like "All Pages"
+        if not df.empty and "pageName" in df.columns:
+            df = df[~df["pageName"].str.lower().isin(["all pages", "all-pages", "allpages"])]
+        # If filtering removed all results, try the hits endpoint
+        if df.empty or len(df) == 0:
+            logger.debug("No individual pages found, trying hits endpoint")
+            return _fetch_pages_from_hits(start, end, limit)
+        return df
+    return _fetch_pages_from_hits(start, end, limit)
+
+
+def _fetch_pages_from_hits(
+    start: int,
+    end: int,
+    limit: int = 20,
+) -> pd.DataFrame:
+    """Fallback: fetch page names from performance/hits endpoint.
+
+    Uses raw hit data to extract unique page names and count views.
+
+    Args:
+        start: Start timestamp (epoch seconds).
+        end: End timestamp (epoch seconds).
+        limit: Maximum number of pages to return.
+
+    Returns:
+        DataFrame with pageName and pageViews columns.
+    """
+    global selected_data_type
+
+    payload = {
+        "site": SITE_PREFIX,
+        "start": start,
+        "end": end,
+        "dataType": selected_data_type,
+        "dataColumns": ["pageName"],
+        "limit": 10000,  # Fetch many hits to get good page coverage
+    }
+
+    logger.debug("Fetching pages from hits: %s", payload)
+    data = fetch_data(ENDPOINTS["performance_hits"], payload, method="POST")
+    logger.debug("Hits response sample: %s", str(data)[:500] if data else "None")
+
+    if validate_api_response(data, "data"):
+        df = pd.DataFrame(data["data"])
+        if not df.empty and "pageName" in df.columns:
+            # Filter out aggregate entries
+            df = df[~df["pageName"].str.lower().isin(["all pages", "all-pages", "allpages"])]
+            # Count page views and get top pages
+            page_counts = df["pageName"].value_counts().head(limit).reset_index()
+            page_counts.columns = ["pageName", "pageViews"]
+            return page_counts
     return pd.DataFrame([])
 
 
