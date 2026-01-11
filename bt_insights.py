@@ -1312,7 +1312,7 @@ def fetch_top_page_names(
         "start": start,
         "end": end,
         "dataColumns": ["pageViews"],
-        "group": ["pageName", "url"],
+        "group": ["pageName"],
         "limit": limit,
         "orderBy": [{"field": "pageViews", "direction": "DESC"}],
     }
@@ -1333,12 +1333,19 @@ def update_available_pages(limit: int = 20) -> list[str]:
         limit: Maximum number of pages to fetch.
 
     Returns:
-        List of available page names.
+        List of available page names (deduplicated).
     """
     global AVAILABLE_PAGES
     df = fetch_top_page_names(limit=limit)
     if not df.empty and "pageName" in df.columns:
-        AVAILABLE_PAGES = df["pageName"].tolist()
+        # Deduplicate while preserving order
+        seen: set[str] = set()
+        unique_pages: list[str] = []
+        for page in df["pageName"].tolist():
+            if page not in seen:
+                seen.add(page)
+                unique_pages.append(page)
+        AVAILABLE_PAGES = unique_pages
     return AVAILABLE_PAGES
 
 
@@ -2179,14 +2186,19 @@ def get_revenue_opportunity(
         device_lost_revenue = 0.0
 
         try:
-            if "speedUpToXData" in page_data and "lostRevenue" in page_data["speedUpToXData"]:
-                arr = page_data["speedUpToXData"]["lostRevenue"]
-                if arr and len(arr) > 0:
-                    device_lost_revenue += float(arr[-1])
+            # Get lost revenue from speedUpByXData (relative improvement model)
+            # Note: speedUpToXData and speedUpByXData are alternative calculations,
+            # not cumulative. We use speedUpByXData as it shows potential if page
+            # were X% faster, which is the more commonly referenced metric.
             if "speedUpByXData" in page_data and "lostRevenue" in page_data["speedUpByXData"]:
                 arr = page_data["speedUpByXData"]["lostRevenue"]
                 if arr and len(arr) > 0:
-                    device_lost_revenue += float(arr[-1])
+                    device_lost_revenue = float(arr[-1])
+            # Fallback to speedUpToXData if speedUpByXData not available
+            elif "speedUpToXData" in page_data and "lostRevenue" in page_data["speedUpToXData"]:
+                arr = page_data["speedUpToXData"]["lostRevenue"]
+                if arr and len(arr) > 0:
+                    device_lost_revenue = float(arr[-1])
         except (ValueError, TypeError, KeyError) as exc:
             logger.error("Error converting lost revenue values: %s", exc)
             device_lost_revenue = 0.0
@@ -3384,7 +3396,13 @@ def main() -> None:
             print_error("Could not fetch top pages from API")
             print_info("Check your credentials and network connection")
             sys.exit(1)
-        pages = df["pageName"].tolist()
+        # Deduplicate while preserving order
+        seen: set[str] = set()
+        pages = []
+        for page in df["pageName"].tolist():
+            if page not in seen:
+                seen.add(page)
+                pages.append(page)
         if show_progress:
             print_success(f"Found {len(pages)} pages")
     elif args.page:
