@@ -1,3 +1,13 @@
 pandas
 requests
 matplotlib
+python-dotenv
+
+# Optional: For YAML config file support
+pyyaml
+
+# Optional: For progress bars
+tqdm
+
+# Development dependencies
+pytest>=7.0.0
