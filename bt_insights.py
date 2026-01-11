@@ -2057,6 +2057,205 @@ def summarize_resource_usage(
     return summary
 
 
+def get_revenue_curve_for_page(page_name: str) -> dict[str, Any] | None:
+    """Fetch revenue curve data for a page to estimate cost per millisecond.
+
+    Args:
+        page_name: Name of the page to analyze.
+
+    Returns:
+        Dictionary with revenue curve data or None if unavailable.
+    """
+    report_date = get_latest_revenue_opportunity_date()
+    if not report_date:
+        return None
+
+    params: dict[str, Any] = {
+        "prefix": SITE_PREFIX,
+        "salesType": "revenue",
+        "reportDate": report_date,
+        "pageName[]": [page_name],
+    }
+
+    opp_data = fetch_data(ENDPOINTS["revenue_opportunity"], method="GET", params=params)
+    if not opp_data:
+        return None
+
+    # Aggregate revenue curve across all devices
+    total_curve: list[float] = []
+    timing_steps: list[int] = []
+
+    for dev in ["Desktop", "Mobile", "Tablet"]:
+        dev_data = opp_data.get(dev)
+        if not dev_data:
+            continue
+        revenue_section = dev_data.get("revenue", {})
+        if page_name not in revenue_section:
+            continue
+        page_data = revenue_section[page_name]
+
+        # Get the speedUpByXData which has timing steps and lost revenue
+        speed_data = page_data.get("speedUpByXData", page_data.get("speedUpToXData", {}))
+        if not speed_data:
+            continue
+
+        lost_revenue = speed_data.get("lostRevenue", [])
+        # Blue Triangle typically uses 100ms steps: [0, 100, 200, 300, ...]
+        steps = speed_data.get("timingSteps", [i * 100 for i in range(len(lost_revenue))])
+
+        if not timing_steps and steps:
+            timing_steps = steps
+
+        if lost_revenue:
+            if not total_curve:
+                total_curve = [0.0] * len(lost_revenue)
+            for i, val in enumerate(lost_revenue):
+                if i < len(total_curve):
+                    total_curve[i] += float(val) if val else 0.0
+
+    if not total_curve or not timing_steps:
+        return None
+
+    return {
+        "timing_steps": timing_steps,
+        "lost_revenue": total_curve,
+    }
+
+
+def estimate_resource_cost_impact(
+    timing_change_ms: float,
+    revenue_curve: dict[str, Any],
+) -> float:
+    """Estimate revenue impact of a timing change using the revenue curve.
+
+    Args:
+        timing_change_ms: Timing change in milliseconds (positive = slowdown, negative = speedup).
+        revenue_curve: Revenue curve data from get_revenue_curve_for_page().
+
+    Returns:
+        Estimated daily revenue impact (positive = cost/loss, negative = savings/gain).
+    """
+    if not revenue_curve:
+        return 0.0
+
+    timing_steps = revenue_curve.get("timing_steps", [])
+    lost_revenue = revenue_curve.get("lost_revenue", [])
+
+    if len(timing_steps) < 2 or len(lost_revenue) < 2:
+        return 0.0
+
+    # Calculate revenue per millisecond from the curve
+    # Use the slope between first two meaningful points
+    step_size = timing_steps[1] - timing_steps[0] if len(timing_steps) > 1 else 100
+    if step_size == 0:
+        step_size = 100
+
+    # Revenue difference per step (e.g., per 100ms)
+    revenue_per_step = lost_revenue[-1] / len(lost_revenue) if lost_revenue else 0
+    revenue_per_ms = revenue_per_step / step_size
+
+    # Apply timing change (slowdown = positive cost, speedup = negative cost/savings)
+    return timing_change_ms * revenue_per_ms
+
+
+def summarize_resource_usage_with_cost(
+    current_df: pd.DataFrame,
+    prev_df: pd.DataFrame,
+    page_name: str,
+) -> str:
+    """Summarize resource usage changes with estimated cost impact.
+
+    Args:
+        current_df: Current period resource data.
+        prev_df: Previous period resource data.
+        page_name: Name of the page for revenue lookup.
+
+    Returns:
+        Markdown formatted summary with cost estimates.
+    """
+    if current_df.empty or prev_df.empty:
+        return "> ⚠️ Cannot summarize resource usage (no data)."
+
+    # Get the grouping column (could be domain, file, or service)
+    group_col = "domain"
+    for col in ["domain", "file", "service"]:
+        if col in current_df.columns:
+            group_col = col
+            break
+
+    current_map = dict(zip(current_df[group_col], current_df["duration"]))
+    prev_map = dict(zip(prev_df[group_col], prev_df["duration"]))
+
+    changes: list[tuple[str, float]] = []
+
+    for resource in current_map:
+        if resource in prev_map:
+            c_val = _to_float(current_map[resource])
+            p_val = _to_float(prev_map[resource])
+            if c_val is not None and p_val is not None:
+                diff = c_val - p_val
+                changes.append((resource, diff))
+
+    changes.sort(key=lambda x: x[1], reverse=True)
+
+    slowdowns = [d for d in changes if d[1] > 0][:5]
+    speedups = sorted([d for d in changes if d[1] < 0], key=lambda x: x[1])[:5]
+
+    # Get revenue curve for cost estimation
+    revenue_curve = get_revenue_curve_for_page(page_name)
+    has_cost_data = revenue_curve is not None
+
+    def format_changes_with_cost(lst: list[tuple[str, float]], is_slowdown: bool) -> list[str]:
+        lines = []
+        for resource, timing_diff in lst:
+            cost = estimate_resource_cost_impact(timing_diff, revenue_curve) if has_cost_data else 0
+            timing_str = f"{'+' if timing_diff > 0 else ''}{round(timing_diff, 1)}ms"
+            if has_cost_data and abs(cost) >= 1:
+                if is_slowdown:
+                    lines.append(f"  - **{resource}**: {timing_str} → ~${abs(cost):,.0f}/day cost")
+                else:
+                    lines.append(f"  - **{resource}**: {timing_str} → ~${abs(cost):,.0f}/day savings")
+            else:
+                lines.append(f"  - **{resource}**: {timing_str}")
+        return lines
+
+    summary = "### 📝 Resource Summary\n"
+
+    if slowdowns:
+        summary += "#### 🔴 Top Slowdowns (Costing You)\n"
+        summary += "\n".join(format_changes_with_cost(slowdowns, is_slowdown=True)) + "\n"
+    else:
+        summary += "#### 🔴 Top Slowdowns\n  - (none)\n"
+
+    if speedups:
+        summary += "#### 🟢 Top Speedups (Saving You)\n"
+        summary += "\n".join(format_changes_with_cost(speedups, is_slowdown=False)) + "\n"
+    else:
+        summary += "#### 🟢 Top Speedups\n  - (none)\n"
+
+    # Add total impact summary
+    if has_cost_data:
+        total_slowdown_cost = sum(
+            estimate_resource_cost_impact(d[1], revenue_curve) for d in slowdowns
+        )
+        total_speedup_savings = sum(
+            abs(estimate_resource_cost_impact(d[1], revenue_curve)) for d in speedups
+        )
+        net_impact = total_slowdown_cost - total_speedup_savings
+
+        summary += "\n#### 💰 Estimated Daily Impact\n"
+        if total_slowdown_cost > 0:
+            summary += f"  - Slowdown costs: ~${total_slowdown_cost:,.0f}/day\n"
+        if total_speedup_savings > 0:
+            summary += f"  - Speedup savings: ~${total_speedup_savings:,.0f}/day\n"
+        if net_impact > 0:
+            summary += f"  - **Net daily loss: ~${net_impact:,.0f}**\n"
+        elif net_impact < 0:
+            summary += f"  - **Net daily gain: ~${abs(net_impact):,.0f}**\n"
+
+    return summary
+
+
 def get_resource_data(page_name: str, compare_previous: bool = True) -> str:
     """Fetch resource data for a page.
 
@@ -2122,7 +2321,8 @@ def get_resource_data(page_name: str, compare_previous: bool = True) -> str:
         if validate_api_response(data_prev, "data"):
             df_prev = pd.DataFrame(data_prev["data"])
             if not df_prev.empty:
-                summary = summarize_resource_usage(df_curr, df_prev)
+                # Use the cost-aware summary that includes revenue impact
+                summary = summarize_resource_usage_with_cost(df_curr, df_prev, page_name)
                 resource_text = summary + "\n\n" + resource_text
 
     return resource_text
