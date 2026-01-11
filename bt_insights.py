@@ -1312,7 +1312,7 @@ def fetch_top_page_names(
         "start": start,
         "end": end,
         "dataColumns": ["pageViews"],
-        "group": ["pageName", "url"],
+        "group": ["pageName"],
         "limit": limit,
         "orderBy": [{"field": "pageViews", "direction": "DESC"}],
     }
@@ -1333,12 +1333,19 @@ def update_available_pages(limit: int = 20) -> list[str]:
         limit: Maximum number of pages to fetch.
 
     Returns:
-        List of available page names.
+        List of available page names (deduplicated).
     """
     global AVAILABLE_PAGES
     df = fetch_top_page_names(limit=limit)
     if not df.empty and "pageName" in df.columns:
-        AVAILABLE_PAGES = df["pageName"].tolist()
+        # Deduplicate while preserving order
+        seen: set[str] = set()
+        unique_pages: list[str] = []
+        for page in df["pageName"].tolist():
+            if page not in seen:
+                seen.add(page)
+                unique_pages.append(page)
+        AVAILABLE_PAGES = unique_pages
     return AVAILABLE_PAGES
 
 
@@ -3389,7 +3396,13 @@ def main() -> None:
             print_error("Could not fetch top pages from API")
             print_info("Check your credentials and network connection")
             sys.exit(1)
-        pages = df["pageName"].tolist()
+        # Deduplicate while preserving order
+        seen: set[str] = set()
+        pages = []
+        for page in df["pageName"].tolist():
+            if page not in seen:
+                seen.add(page)
+                pages.append(page)
         if show_progress:
             print_success(f"Found {len(pages)} pages")
     elif args.page:
