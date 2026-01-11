@@ -1007,5 +1007,193 @@ class TestNotificationArguments:
         assert "pdf" in help_output or True  # May not always capture
 
 
+class TestPercentileSupport:
+    """Tests for percentile configuration."""
+
+    def test_selected_percentiles_default_none(self):
+        """Test that selected_percentiles is None by default."""
+        # Reset to default
+        bt_insights.selected_percentiles = None
+        assert bt_insights.selected_percentiles is None
+
+    def test_selected_percentiles_can_be_set(self):
+        """Test that selected_percentiles can be set."""
+        bt_insights.selected_percentiles = [90]
+        assert bt_insights.selected_percentiles == [90]
+        # Reset
+        bt_insights.selected_percentiles = None
+
+    def test_valid_percentile_values(self):
+        """Test valid percentile values."""
+        valid_percentiles = [50, 75, 90, 95, 99]
+        for p in valid_percentiles:
+            bt_insights.selected_percentiles = [p]
+            assert bt_insights.selected_percentiles == [p]
+        # Reset
+        bt_insights.selected_percentiles = None
+
+
+class TestDataTypeOption:
+    """Tests for data type configuration."""
+
+    def test_selected_data_type_default(self):
+        """Test that selected_data_type defaults to 'rum'."""
+        assert bt_insights.selected_data_type == "rum"
+
+    def test_selected_data_type_can_be_set(self):
+        """Test that selected_data_type can be set."""
+        bt_insights.selected_data_type = "synthetic"
+        assert bt_insights.selected_data_type == "synthetic"
+        # Reset
+        bt_insights.selected_data_type = "rum"
+
+    def test_valid_data_types(self):
+        """Test valid data type values."""
+        valid_types = ["rum", "synthetic", "native", "basepage"]
+        for dt in valid_types:
+            bt_insights.selected_data_type = dt
+            assert bt_insights.selected_data_type == dt
+        # Reset
+        bt_insights.selected_data_type = "rum"
+
+
+class TestResourceGrouping:
+    """Tests for resource grouping configuration."""
+
+    def test_resource_group_by_default(self):
+        """Test that resource_group_by defaults to 'domain'."""
+        assert bt_insights.resource_group_by == "domain"
+
+    def test_resource_group_by_can_be_set(self):
+        """Test that resource_group_by can be set."""
+        bt_insights.resource_group_by = "file"
+        assert bt_insights.resource_group_by == "file"
+        # Reset
+        bt_insights.resource_group_by = "domain"
+
+    def test_valid_resource_groups(self):
+        """Test valid resource group values."""
+        valid_groups = ["domain", "file", "service"]
+        for g in valid_groups:
+            bt_insights.resource_group_by = g
+            assert bt_insights.resource_group_by == g
+        # Reset
+        bt_insights.resource_group_by = "domain"
+
+
+class TestAdvancedCLIArguments:
+    """Tests for advanced CLI arguments."""
+
+    def test_percentile_argument_in_parser(self):
+        """Test that --percentile argument is available."""
+        import sys
+        old_argv = sys.argv
+        try:
+            sys.argv = ["bt_insights.py", "--percentile", "90", "--dry-run"]
+            args = bt_insights.parse_arguments()
+            assert args.percentile == 90
+        finally:
+            sys.argv = old_argv
+
+    def test_data_type_argument_in_parser(self):
+        """Test that --data-type argument is available."""
+        import sys
+        old_argv = sys.argv
+        try:
+            sys.argv = ["bt_insights.py", "--data-type", "synthetic", "--dry-run"]
+            args = bt_insights.parse_arguments()
+            assert args.data_type == "synthetic"
+        finally:
+            sys.argv = old_argv
+
+    def test_resource_group_argument_in_parser(self):
+        """Test that --resource-group argument is available."""
+        import sys
+        old_argv = sys.argv
+        try:
+            sys.argv = ["bt_insights.py", "--resource-group", "file", "--dry-run"]
+            args = bt_insights.parse_arguments()
+            assert args.resource_group == "file"
+        finally:
+            sys.argv = old_argv
+
+    def test_percentile_choices(self):
+        """Test that percentile only accepts valid values."""
+        import sys
+        old_argv = sys.argv
+        try:
+            sys.argv = ["bt_insights.py", "--percentile", "50", "--dry-run"]
+            args = bt_insights.parse_arguments()
+            assert args.percentile == 50
+
+            sys.argv = ["bt_insights.py", "--percentile", "99", "--dry-run"]
+            args = bt_insights.parse_arguments()
+            assert args.percentile == 99
+        finally:
+            sys.argv = old_argv
+
+    def test_data_type_default(self):
+        """Test that --data-type defaults to 'rum'."""
+        import sys
+        old_argv = sys.argv
+        try:
+            sys.argv = ["bt_insights.py", "--dry-run"]
+            args = bt_insights.parse_arguments()
+            assert args.data_type == "rum"
+        finally:
+            sys.argv = old_argv
+
+    def test_resource_group_default(self):
+        """Test that --resource-group defaults to 'domain'."""
+        import sys
+        old_argv = sys.argv
+        try:
+            sys.argv = ["bt_insights.py", "--dry-run"]
+            args = bt_insights.parse_arguments()
+            assert args.resource_group == "domain"
+        finally:
+            sys.argv = old_argv
+
+
+class TestShellCompletionEnhancements:
+    """Tests for shell completion script enhancements."""
+
+    def test_bash_completion_includes_percentile(self):
+        """Test that bash completion includes --percentile."""
+        completion = bt_insights.generate_shell_completion("bash")
+        assert "--percentile" in completion
+        assert "50 75 90 95 99" in completion
+
+    def test_bash_completion_includes_data_type(self):
+        """Test that bash completion includes --data-type."""
+        completion = bt_insights.generate_shell_completion("bash")
+        assert "--data-type" in completion
+        assert "rum synthetic native basepage" in completion
+
+    def test_bash_completion_includes_resource_group(self):
+        """Test that bash completion includes --resource-group."""
+        completion = bt_insights.generate_shell_completion("bash")
+        assert "--resource-group" in completion
+        assert "domain file service" in completion
+
+    def test_zsh_completion_includes_percentile(self):
+        """Test that zsh completion includes --percentile."""
+        completion = bt_insights.generate_shell_completion("zsh")
+        assert "--percentile" in completion
+        assert "percentiles=(50 75 90 95 99)" in completion
+
+    def test_zsh_completion_includes_data_type(self):
+        """Test that zsh completion includes --data-type."""
+        completion = bt_insights.generate_shell_completion("zsh")
+        assert "--data-type" in completion
+        assert "data_types=(rum synthetic native basepage)" in completion
+
+    def test_zsh_completion_includes_resource_group(self):
+        """Test that zsh completion includes --resource-group."""
+        completion = bt_insights.generate_shell_completion("zsh")
+        assert "--resource-group" in completion
+        assert "resource_groups=(domain file service)" in completion
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

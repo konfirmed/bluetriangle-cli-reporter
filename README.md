@@ -14,11 +14,14 @@ A powerful Python CLI that connects to the [Blue Triangle API](https://help.blue
 - Fetch real-time and historical performance data (LCP, TBT, CLS, INP, etc.)
 - Compare current vs. previous time ranges (delta and % change)
 - Get revenue and lost revenue opportunity estimates
-- Identify slow/fast resources per domain
+- Identify slow/fast resources per domain, file, or service
 - Generate reports across multiple time ranges
-- Export to **Markdown**, **JSON**, or **CSV** formats
+- Export to **Markdown**, **JSON**, **CSV**, **HTML**, or **PDF** formats
 - Colored terminal output with progress indicators
 - Supports top N pages by page views
+- Percentile analysis (p50, p75, p90, p95, p99) in addition to averages
+- Multiple data types: RUM, Synthetic, Native, Basepage
+- Slack, Microsoft Teams, and Email notifications
 
 ### Sample Report Screenshot
 <img width="747" alt="Sample Report Screenshot" src="https://github.com/user-attachments/assets/b792bd2c-150b-455c-abfc-0c19f9cfd24c" />
@@ -172,6 +175,25 @@ python bt_insights.py --page pdp --config my_config.yaml
 python bt_insights.py --page pdp --alerts
 ```
 
+### Advanced Data Analysis
+
+```bash
+# Use 90th percentile instead of averages
+python bt_insights.py --page pdp --percentile 90
+
+# Use median (50th percentile)
+python bt_insights.py --page pdp --percentile 50
+
+# Analyze synthetic monitoring data instead of RUM
+python bt_insights.py --page pdp --data-type synthetic
+
+# Group resources by file instead of domain
+python bt_insights.py --page pdp --resource-group file
+
+# Combine options: 95th percentile synthetic data grouped by service
+python bt_insights.py --page pdp --percentile 95 --data-type synthetic --resource-group service
+```
+
 ### Period Comparison
 
 ```bash
@@ -274,6 +296,14 @@ python bt_insights.py --help
 | `--cache` | Enable API response caching | `--cache` |
 | `--clear-cache` | Clear cache and exit | `--clear-cache` |
 | `--config` | Path to YAML config file | `--config my_config.yaml` |
+
+### Advanced Data Options
+
+| Flag | Description | Example |
+|------|-------------|---------|
+| `--percentile` | Use percentile instead of average (50, 75, 90, 95, 99) | `--percentile 90` |
+| `--data-type` | Data source: rum, synthetic, native, basepage (default: rum) | `--data-type synthetic` |
+| `--resource-group` | Group resources by: domain, file, service (default: domain) | `--resource-group file` |
 
 ### Comparison Mode
 
@@ -390,6 +420,9 @@ pytest tests/ -v
 - [x] Add input validation
 - [x] Add Slack/Teams/email integration for auto-sharing
 - [x] Add PDF export option
+- [x] Add percentile analysis (p50, p75, p90, p95, p99)
+- [x] Add data type selection (RUM, Synthetic, Native, Basepage)
+- [x] Add flexible resource grouping (domain, file, service)
 
 ---
 

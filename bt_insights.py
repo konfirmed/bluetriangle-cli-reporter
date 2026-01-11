@@ -272,6 +272,18 @@ cache_enabled = False
 # Dry run mode - preview actions without making API calls
 dry_run_mode = False
 
+# Percentile settings - None means use averages (default)
+# Valid percentiles: 50 (median), 75, 90, 95, 99
+selected_percentiles: list[int] | None = None
+
+# Data type for performance queries
+# Options: "rum" (Real User Monitoring), "synthetic", "native", "basepage"
+selected_data_type: str = "rum"
+
+# Resource grouping option
+# Options: "domain", "file", "service"
+resource_group_by: str = "domain"
+
 
 # ==================
 # CONFIGURATION FILE
@@ -1531,11 +1543,11 @@ def get_page_performance(page_name: str) -> str:
     Returns:
         Markdown formatted performance report.
     """
-    payload = {
+    payload: dict[str, Any] = {
         "site": SITE_PREFIX,
         "start": one_day_ago,
         "end": now,
-        "dataType": "rum",
+        "dataType": selected_data_type,
         "dataColumns": [
             "onload", "dns", "tcp", "firstByte",
             "largestContentfulPaint", "totalBlockingTime",
@@ -1547,6 +1559,11 @@ def get_page_performance(page_name: str) -> str:
         "sort": "asc",
         "pageName": page_name,
     }
+
+    # Add percentile settings if specified
+    if selected_percentiles:
+        payload["avgType"] = "percentile"
+        payload["percentile"] = selected_percentiles
 
     prev_payload = dict(payload)
     if two_days_ago is not None:
@@ -1700,11 +1717,11 @@ def gather_page_metrics(page_name: str) -> dict[str, Any] | None:
     """
     global now, one_day_ago, two_days_ago
 
-    payload = {
+    payload: dict[str, Any] = {
         "site": SITE_PREFIX,
         "start": one_day_ago,
         "end": now,
-        "dataType": "rum",
+        "dataType": selected_data_type,
         "dataColumns": [
             "onload", "dns", "tcp", "firstByte",
             "largestContentfulPaint", "totalBlockingTime",
@@ -1716,6 +1733,11 @@ def gather_page_metrics(page_name: str) -> dict[str, Any] | None:
         "sort": "asc",
         "pageName": page_name,
     }
+
+    # Add percentile settings if specified
+    if selected_percentiles:
+        payload["avgType"] = "percentile"
+        payload["percentile"] = selected_percentiles
 
     prev_payload = dict(payload)
     if two_days_ago:
@@ -1746,25 +1768,36 @@ def gather_page_metrics(page_name: str) -> dict[str, Any] | None:
     latest_curr = df_curr.iloc[-1]
     latest_prev = df_prev.iloc[-1]
 
+    # Helper to get metric column name (with percentile suffix if applicable)
+    def get_col(base_name: str) -> str:
+        if selected_percentiles:
+            # Use the first percentile (typically the most useful one like p75 or p90)
+            return f"{base_name}-{selected_percentiles[0]}"
+        return base_name
+
     row = {
         "page": page_name,
-        "onload_curr": _to_float(latest_curr.get("onload")),
-        "onload_prev": _to_float(latest_prev.get("onload")),
-        "lcp_curr": _to_float(latest_curr.get("largestContentfulPaint")),
-        "lcp_prev": _to_float(latest_prev.get("largestContentfulPaint")),
-        "inp_curr": _to_float(latest_curr.get("intToNextPaint")),
-        "inp_prev": _to_float(latest_prev.get("intToNextPaint")),
-        "cls_curr": _to_float(latest_curr.get("cumulativeLayoutShift")),
-        "cls_prev": _to_float(latest_prev.get("cumulativeLayoutShift")),
-        "tbt_curr": _to_float(latest_curr.get("totalBlockingTime")),
-        "tbt_prev": _to_float(latest_prev.get("totalBlockingTime")),
-        "fb_curr": _to_float(latest_curr.get("firstByte")),
-        "fb_prev": _to_float(latest_prev.get("firstByte")),
-        "dns_curr": _to_float(latest_curr.get("dns")),
-        "dns_prev": _to_float(latest_prev.get("dns")),
-        "tcp_curr": _to_float(latest_curr.get("tcp")),
-        "tcp_prev": _to_float(latest_prev.get("tcp")),
+        "onload_curr": _to_float(latest_curr.get(get_col("onload"))),
+        "onload_prev": _to_float(latest_prev.get(get_col("onload"))),
+        "lcp_curr": _to_float(latest_curr.get(get_col("largestContentfulPaint"))),
+        "lcp_prev": _to_float(latest_prev.get(get_col("largestContentfulPaint"))),
+        "inp_curr": _to_float(latest_curr.get(get_col("intToNextPaint"))),
+        "inp_prev": _to_float(latest_prev.get(get_col("intToNextPaint"))),
+        "cls_curr": _to_float(latest_curr.get(get_col("cumulativeLayoutShift"))),
+        "cls_prev": _to_float(latest_prev.get(get_col("cumulativeLayoutShift"))),
+        "tbt_curr": _to_float(latest_curr.get(get_col("totalBlockingTime"))),
+        "tbt_prev": _to_float(latest_prev.get(get_col("totalBlockingTime"))),
+        "fb_curr": _to_float(latest_curr.get(get_col("firstByte"))),
+        "fb_prev": _to_float(latest_prev.get(get_col("firstByte"))),
+        "dns_curr": _to_float(latest_curr.get(get_col("dns"))),
+        "dns_prev": _to_float(latest_prev.get(get_col("dns"))),
+        "tcp_curr": _to_float(latest_curr.get(get_col("tcp"))),
+        "tcp_prev": _to_float(latest_prev.get(get_col("tcp"))),
     }
+
+    # Add percentile info to row if applicable
+    if selected_percentiles:
+        row["percentile"] = selected_percentiles[0]
 
     is_vt = "vt" in page_name.lower()
     onload_delta = safe_delta(row["onload_curr"], row["onload_prev"])
@@ -1945,14 +1978,22 @@ def get_resource_data(page_name: str, compare_previous: bool = True) -> str:
     """
     global now, one_day_ago, two_days_ago
 
-    payload_curr = {
+    # Use configured resource grouping (domain, file, or service)
+    group_col = resource_group_by
+
+    payload_curr: dict[str, Any] = {
         "site": SITE_PREFIX,
         "start": one_day_ago,
         "end": now,
         "dataColumns": ["duration", "elementCount"],
-        "group": ["domain"],
+        "group": [group_col],
         "pageName[]": [page_name],
     }
+
+    # Add percentile settings for resource data if specified
+    if selected_percentiles:
+        payload_curr["avgType"] = "percentile"
+        payload_curr["percentile"] = selected_percentiles
 
     payload_prev = dict(payload_curr)
     if compare_previous and two_days_ago is not None:
@@ -1967,11 +2008,21 @@ def get_resource_data(page_name: str, compare_previous: bool = True) -> str:
     if df_curr.empty:
         return f"> ⚠️ Resource data empty for **{page_name}**.\n"
 
-    resource_text = f"### 📦 Resource Usage ({page_name})\n"
-    lines = [
-        f"- {row['domain']}: {row['duration']} ms, {row['elementCount']} elements"
-        for _, row in df_curr.iterrows()
-    ]
+    # Get duration column name (with percentile suffix if applicable)
+    duration_col = "duration"
+    if selected_percentiles:
+        duration_col = f"duration-{selected_percentiles[0]}"
+
+    group_label = {"domain": "Domain", "file": "File", "service": "Service"}.get(group_col, group_col)
+    resource_text = f"### 📦 Resource Usage by {group_label} ({page_name})\n"
+
+    lines = []
+    for _, row in df_curr.iterrows():
+        group_val = row.get(group_col, "Unknown")
+        duration = row.get(duration_col, row.get("duration", 0))
+        element_count = row.get("elementCount", 0)
+        lines.append(f"- {group_val}: {duration} ms, {element_count} elements")
+
     resource_text += "\n".join(lines)
 
     if compare_previous and two_days_ago is not None:
@@ -2952,6 +3003,24 @@ Environment Variables:
         choices=["bash", "zsh"],
         help="Generate shell completion script and exit",
     )
+    advanced_group.add_argument(
+        "--percentile",
+        type=int,
+        choices=[50, 75, 90, 95, 99],
+        help="Use percentile instead of average (50=median, 75, 90, 95, 99)",
+    )
+    advanced_group.add_argument(
+        "--data-type",
+        choices=["rum", "synthetic", "native", "basepage"],
+        default="rum",
+        help="Data type for performance queries (default: rum)",
+    )
+    advanced_group.add_argument(
+        "--resource-group",
+        choices=["domain", "file", "service"],
+        default="domain",
+        help="Group resources by domain, file, or service (default: domain)",
+    )
 
     # Utility options
     util_group = parser.add_argument_group("Utility Options")
@@ -3003,7 +3072,7 @@ _bt_insights_completions() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    opts="--page --top-pages --time-range --start --end --multi-range --compare --output --format --metrics --slack-webhook --teams-webhook --email-to --email-subject --email-attach --config --cache --clear-cache --alerts --generate-completion --test-connection --no-color --quiet --verbose --dry-run --help"
+    opts="--page --top-pages --time-range --start --end --multi-range --compare --output --format --metrics --slack-webhook --teams-webhook --email-to --email-subject --email-attach --config --cache --clear-cache --alerts --generate-completion --percentile --data-type --resource-group --test-connection --no-color --quiet --verbose --dry-run --help"
 
     case "${prev}" in
         --time-range)
@@ -3020,6 +3089,18 @@ _bt_insights_completions() {
             ;;
         --generate-completion)
             COMPREPLY=( $(compgen -W "bash zsh" -- ${cur}) )
+            return 0
+            ;;
+        --percentile)
+            COMPREPLY=( $(compgen -W "50 75 90 95 99" -- ${cur}) )
+            return 0
+            ;;
+        --data-type)
+            COMPREPLY=( $(compgen -W "rum synthetic native basepage" -- ${cur}) )
+            return 0
+            ;;
+        --resource-group)
+            COMPREPLY=( $(compgen -W "domain file service" -- ${cur}) )
             return 0
             ;;
         --output|-o|--config)
@@ -3048,12 +3129,15 @@ complete -F _bt_insights_completions python bt_insights.py
 # Add this to your .zshrc or place in your fpath
 
 _bt_insights() {
-    local -a opts time_ranges formats metrics shells
+    local -a opts time_ranges formats metrics shells percentiles data_types resource_groups
 
     time_ranges=(qd hd 24h xd 2d 6d 7d 28d 30d 90d 1y 2y 3y)
     formats=(markdown json csv html pdf)
     metrics=(LCP TBT CLS INP FB)
     shells=(bash zsh)
+    percentiles=(50 75 90 95 99)
+    data_types=(rum synthetic native basepage)
+    resource_groups=(domain file service)
 
     _arguments -C \\
         '--page[Specify page names]:page:' \\
@@ -3076,6 +3160,9 @@ _bt_insights() {
         '--clear-cache[Clear cache]' \\
         '--alerts[Show threshold alerts]' \\
         '--generate-completion[Generate completion script]:shell:($shells)' \\
+        '--percentile[Use percentile instead of average]:percentile:($percentiles)' \\
+        '--data-type[Data type for queries]:type:($data_types)' \\
+        '--resource-group[Group resources by]:grouping:($resource_groups)' \\
         '--test-connection[Test API connection]' \\
         '--no-color[Disable colors]' \\
         {-q,--quiet}'[Suppress progress]' \\
@@ -3224,6 +3311,21 @@ def main() -> None:
         selected_metrics = args.metrics
         if show_progress:
             print_info(f"Filtering metrics: {', '.join(args.metrics)}")
+
+    # Set percentile, data type, and resource grouping options
+    global selected_percentiles, selected_data_type, resource_group_by
+    if args.percentile:
+        selected_percentiles = [args.percentile]
+        if show_progress:
+            print_info(f"Using percentile: p{args.percentile}")
+    if args.data_type:
+        selected_data_type = args.data_type
+        if show_progress and args.data_type != "rum":
+            print_info(f"Data type: {args.data_type}")
+    if args.resource_group:
+        resource_group_by = args.resource_group
+        if show_progress and args.resource_group != "domain":
+            print_info(f"Resource grouping: {args.resource_group}")
 
     global now, one_day_ago, two_days_ago
     try:
