@@ -257,6 +257,7 @@ AVAILABLE_PAGES: list[str] = ["homepage"]
 now: int | None = None
 one_day_ago: int | None = None
 two_days_ago: int | None = None
+selected_time_range_days: float = 1.0  # Number of days in the selected time range
 
 # Selected metrics filter (None means all metrics)
 selected_metrics: list[str] | None = None
@@ -1478,6 +1479,8 @@ def parse_time_args(
     Raises:
         ValueError: If timestamps are invalid.
     """
+    global selected_time_range_days
+
     if args.multi_range:
         ranges = [x.strip() for x in args.multi_range.split(",")]
         # Validate each range is known
@@ -1505,9 +1508,12 @@ def parse_time_args(
                 f"These are epoch timestamps (seconds since 1970)."
             )
 
+        # Calculate days from custom timestamps
+        selected_time_range_days = (end - start) / 86400
         return start, end, None, None, []
 
     days = DAY_MAP.get(args.time_range, 1)
+    selected_time_range_days = days
     end = now_ts
     start = int(now_ts - (days * 86400))
     prev_end = start
@@ -1526,8 +1532,10 @@ def compute_time_window(
     Returns:
         Tuple of (start, end, prev_start, prev_end).
     """
+    global selected_time_range_days
     now_ts = int(time.time())
     days = DAY_MAP.get(range_str, 1)
+    selected_time_range_days = days
     end = now_ts
     start = int(now_ts - (days * 86400))
     prev_end = start
@@ -2135,6 +2143,8 @@ def estimate_resource_cost_impact(
     Returns:
         Estimated daily revenue impact (positive = cost/loss, negative = savings/gain).
     """
+    global selected_time_range_days
+
     if not revenue_curve:
         return 0.0
 
@@ -2154,8 +2164,11 @@ def estimate_resource_cost_impact(
     revenue_per_step = lost_revenue[-1] / len(lost_revenue) if lost_revenue else 0
     revenue_per_ms = revenue_per_step / step_size
 
+    # Divide by number of days to get daily average
+    days = selected_time_range_days if selected_time_range_days > 0 else 1.0
+
     # Apply timing change (slowdown = positive cost, speedup = negative cost/savings)
-    return timing_change_ms * revenue_per_ms
+    return (timing_change_ms * revenue_per_ms) / days
 
 
 def summarize_resource_usage_with_cost(
@@ -2672,6 +2685,8 @@ def get_device_cost_breakdown(page_name: str) -> str:
     Returns:
         Markdown formatted device cost breakdown.
     """
+    global selected_time_range_days
+
     report_date = get_latest_revenue_opportunity_date()
     if not report_date:
         return "> ⚠️ No revenue data available for device breakdown.\n"
@@ -2688,6 +2703,7 @@ def get_device_cost_breakdown(page_name: str) -> str:
         return "> ⚠️ No device revenue data available.\n"
 
     device_costs: list[tuple[str, float]] = []
+    days = selected_time_range_days if selected_time_range_days > 0 else 1.0
 
     for device in ["Mobile", "Desktop", "Tablet"]:
         dev_data = opp_data.get(device)
@@ -2711,7 +2727,8 @@ def get_device_cost_breakdown(page_name: str) -> str:
             lost_revenue = 0.0
 
         if lost_revenue > 0:
-            device_costs.append((device, lost_revenue))
+            # Divide by number of days to get daily average
+            device_costs.append((device, lost_revenue / days))
 
     if not device_costs:
         return "> ⚠️ No device-specific cost data available.\n"
@@ -2742,6 +2759,8 @@ def get_page_cost_ranking(pages: list[str]) -> str:
     Returns:
         Markdown formatted page cost ranking.
     """
+    global selected_time_range_days
+
     report_date = get_latest_revenue_opportunity_date()
     if not report_date:
         return "> ⚠️ No revenue data available for page ranking.\n"
@@ -2757,6 +2776,7 @@ def get_page_cost_ranking(pages: list[str]) -> str:
         return "> ⚠️ No revenue data available.\n"
 
     page_costs: dict[str, float] = {}
+    days = selected_time_range_days if selected_time_range_days > 0 else 1.0
 
     for page_name in pages:
         total_cost = 0.0
@@ -2780,7 +2800,8 @@ def get_page_cost_ranking(pages: list[str]) -> str:
                 pass
 
         if total_cost > 0:
-            page_costs[page_name] = total_cost
+            # Divide by number of days to get daily average
+            page_costs[page_name] = total_cost / days
 
     if not page_costs:
         return "> ⚠️ No page cost data available.\n"
