@@ -1325,14 +1325,19 @@ def fetch_top_page_names(
 
     if validate_api_response(data, "data"):
         df = pd.DataFrame(data["data"])
-        # Filter out aggregate entries like "All Pages"
+        logger.debug("Performance endpoint returned %d rows", len(df))
         if not df.empty and "pageName" in df.columns:
+            original_pages = df["pageName"].tolist()
+            logger.debug("Raw page names: %s", original_pages[:10])
+            # Filter out aggregate entries like "All Pages"
             df = df[~df["pageName"].str.lower().isin(["all pages", "all-pages", "allpages"])]
+            logger.debug("After filtering 'All Pages': %d rows", len(df))
         # If filtering removed all results, try the hits endpoint
         if df.empty or len(df) == 0:
             logger.debug("No individual pages found, trying hits endpoint")
             return _fetch_pages_from_hits(start, end, limit)
         return df
+    logger.debug("Performance endpoint validation failed, trying hits endpoint")
     return _fetch_pages_from_hits(start, end, limit)
 
 
@@ -1370,13 +1375,21 @@ def _fetch_pages_from_hits(
 
     if validate_api_response(data, "data"):
         df = pd.DataFrame(data["data"])
+        logger.debug("Hits endpoint returned %d rows, columns: %s", len(df), list(df.columns) if not df.empty else [])
         if not df.empty and "pageName" in df.columns:
+            unique_before = df["pageName"].nunique()
+            logger.debug("Unique page names before filter: %d", unique_before)
             # Filter out aggregate entries
             df = df[~df["pageName"].str.lower().isin(["all pages", "all-pages", "allpages"])]
             # Count page views and get top pages
             page_counts = df["pageName"].value_counts().head(limit).reset_index()
             page_counts.columns = ["pageName", "pageViews"]
+            logger.debug("Returning %d pages from hits: %s", len(page_counts), page_counts["pageName"].tolist()[:5])
             return page_counts
+        else:
+            logger.debug("Hits endpoint: empty df or no pageName column")
+    else:
+        logger.debug("Hits endpoint validation failed")
     return pd.DataFrame([])
 
 
