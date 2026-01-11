@@ -2079,7 +2079,7 @@ def get_resource_data(page_name: str, compare_previous: bool = True) -> str:
         "dataType": selected_data_type,
         "dataColumns": ["duration", "elementCount"],
         "group": [group_col],
-        "pageName[]": [page_name],
+        "pageName": page_name,
     }
 
     # Add percentile settings for resource data if specified
