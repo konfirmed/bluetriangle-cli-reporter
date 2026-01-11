@@ -285,6 +285,9 @@ selected_data_type: str = "rum"
 # Options: "domain", "file", "service"
 resource_group_by: str = "domain"
 
+# Resource file filter pattern (e.g., "chunk.273*.js")
+resource_file_filter: str | None = None
+
 
 # ==================
 # CONFIGURATION FILE
@@ -2923,6 +2926,144 @@ def get_cost_trend(page_name: str) -> str:
     return output
 
 
+def get_resource_file_analysis(page_name: str) -> str:
+    """Analyze specific resource files matching the filter pattern.
+
+    Shows timing changes and cost impact for resources matching the
+    --resource-file pattern.
+
+    Args:
+        page_name: Name of the page to analyze.
+
+    Returns:
+        Markdown formatted resource file analysis.
+    """
+    global now, one_day_ago, two_days_ago, selected_data_type, resource_file_filter
+
+    if not resource_file_filter:
+        return ""
+
+    import fnmatch
+
+    # Fetch resource data grouped by file
+    payload_curr: dict[str, Any] = {
+        "site": SITE_PREFIX,
+        "start": one_day_ago,
+        "end": now,
+        "dataType": selected_data_type,
+        "dataColumns": ["duration", "elementCount"],
+        "group": ["file"],
+        "pageName": page_name,
+    }
+
+    if selected_percentiles:
+        payload_curr["avgType"] = "percentile"
+        payload_curr["percentile"] = selected_percentiles
+
+    payload_prev = dict(payload_curr)
+    if two_days_ago is not None:
+        payload_prev["start"] = two_days_ago
+        payload_prev["end"] = one_day_ago
+
+    data_curr = fetch_data(ENDPOINTS["resource"], payload_curr)
+    data_prev = fetch_data(ENDPOINTS["resource"], payload_prev) if two_days_ago else None
+
+    if not validate_api_response(data_curr, "data"):
+        return f"> ⚠️ No resource file data for **{page_name}**.\n"
+
+    df_curr = pd.DataFrame(data_curr["data"])
+    df_prev = pd.DataFrame(data_prev["data"]) if data_prev and validate_api_response(data_prev, "data") else pd.DataFrame()
+
+    if df_curr.empty or "file" not in df_curr.columns:
+        return f"> ⚠️ No file-level resource data for **{page_name}**.\n"
+
+    # Filter files matching the pattern
+    pattern = resource_file_filter.lower()
+    matching_curr = df_curr[df_curr["file"].str.lower().apply(lambda x: fnmatch.fnmatch(x, pattern))]
+
+    if matching_curr.empty:
+        # Try partial match if exact pattern doesn't work
+        matching_curr = df_curr[df_curr["file"].str.lower().str.contains(pattern.replace("*", ""), regex=False)]
+
+    if matching_curr.empty:
+        return f"> ⚠️ No resources matching '{resource_file_filter}' found for **{page_name}**.\n"
+
+    # Get revenue curve for cost estimation
+    revenue_curve = get_revenue_curve_for_page(page_name)
+
+    output = f"### 🔍 Resource File Analysis: `{resource_file_filter}`\n"
+    output += f"*Matching {len(matching_curr)} file(s) on {page_name}*\n\n"
+
+    total_duration_curr = 0.0
+    total_duration_prev = 0.0
+    total_elements = 0
+    file_details: list[tuple[str, float, float, float, int]] = []  # (file, curr_dur, prev_dur, delta, elements)
+
+    for _, row in matching_curr.iterrows():
+        file_name = row.get("file", "Unknown")
+        duration_curr = _to_float(row.get("duration", 0)) or 0
+        element_count = int(row.get("elementCount", 0) or 0)
+
+        # Find previous duration for this file
+        duration_prev = 0.0
+        if not df_prev.empty and "file" in df_prev.columns:
+            prev_match = df_prev[df_prev["file"] == file_name]
+            if not prev_match.empty:
+                duration_prev = _to_float(prev_match.iloc[0].get("duration", 0)) or 0
+
+        delta = duration_curr - duration_prev
+        total_duration_curr += duration_curr
+        total_duration_prev += duration_prev
+        total_elements += element_count
+        file_details.append((file_name, duration_curr, duration_prev, delta, element_count))
+
+    # Sort by current duration (slowest first)
+    file_details.sort(key=lambda x: x[1], reverse=True)
+
+    # Show individual files (limit to top 10)
+    output += "#### Individual Files\n"
+    for file_name, dur_curr, dur_prev, delta, elements in file_details[:10]:
+        # Truncate long file names
+        display_name = file_name if len(file_name) <= 60 else "..." + file_name[-57:]
+        delta_str = f"{'+' if delta > 0 else ''}{delta:.0f}ms" if dur_prev > 0 else "new"
+
+        if revenue_curve and abs(delta) > 0:
+            cost = estimate_resource_cost_impact(delta, revenue_curve)
+            if abs(cost) >= 1:
+                cost_str = f" → ~${abs(cost):,.0f}/day {'cost' if cost > 0 else 'savings'}"
+            else:
+                cost_str = ""
+        else:
+            cost_str = ""
+
+        output += f"- `{display_name}`: {dur_curr:.0f}ms ({delta_str}){cost_str}\n"
+
+    if len(file_details) > 10:
+        output += f"  - *...and {len(file_details) - 10} more files*\n"
+
+    # Summary
+    total_delta = total_duration_curr - total_duration_prev
+    output += "\n#### Summary\n"
+    output += f"- **Total files**: {len(file_details)}\n"
+    output += f"- **Total duration**: {total_duration_curr:.0f}ms\n"
+    output += f"- **Total elements**: {total_elements:,}\n"
+
+    if total_duration_prev > 0:
+        delta_pct = ((total_delta) / total_duration_prev) * 100 if total_duration_prev else 0
+        delta_str = f"{'+' if total_delta > 0 else ''}{total_delta:.0f}ms ({delta_pct:+.1f}%)"
+        output += f"- **Change from previous period**: {delta_str}\n"
+
+        if revenue_curve:
+            total_cost = estimate_resource_cost_impact(total_delta, revenue_curve)
+            if abs(total_cost) >= 1:
+                if total_cost > 0:
+                    output += f"\n💰 **Estimated cost impact**: ~${total_cost:,.0f}/day\n"
+                else:
+                    output += f"\n💰 **Estimated savings**: ~${abs(total_cost):,.0f}/day\n"
+
+    return output
+
+
 # ========== BUILD PAGE REPORT ==========
 
 
@@ -2939,6 +3080,12 @@ def build_page_report(page_name: str) -> str:
     text = f"## 📄 Page: {page_name}\n{time_range_value}\n"
     text += get_page_performance(page_name) + "\n\n"
     text += get_resource_data(page_name, compare_previous=True) + "\n\n"
+
+    # Resource file analysis (if --resource-file is specified)
+    resource_file_section = get_resource_file_analysis(page_name)
+    if resource_file_section:
+        text += resource_file_section + "\n\n"
+
     text += get_page_revenue(page_name) + "\n\n"
     text += get_revenue_opportunity(page_name) + "\n\n"
 
@@ -3718,6 +3865,12 @@ Environment Variables:
         default="domain",
         help="Group resources by domain, file, or service (default: domain)",
     )
+    advanced_group.add_argument(
+        "--resource-file",
+        type=str,
+        default=None,
+        help="Filter and analyze specific resource files (supports wildcards, e.g., 'chunk.273*.js')",
+    )
 
     # Utility options
     util_group = parser.add_argument_group("Utility Options")
@@ -4010,7 +4163,7 @@ def main() -> None:
             print_info(f"Filtering metrics: {', '.join(args.metrics)}")
 
     # Set percentile, data type, and resource grouping options
-    global selected_percentiles, selected_data_type, resource_group_by
+    global selected_percentiles, selected_data_type, resource_group_by, resource_file_filter
     if args.percentile:
         selected_percentiles = [args.percentile]
         if show_progress:
@@ -4023,6 +4176,12 @@ def main() -> None:
         resource_group_by = args.resource_group
         if show_progress and args.resource_group != "domain":
             print_info(f"Resource grouping: {args.resource_group}")
+    if args.resource_file:
+        resource_file_filter = args.resource_file
+        # When filtering by file, force resource grouping to "file"
+        resource_group_by = "file"
+        if show_progress:
+            print_info(f"Resource file filter: {args.resource_file}")
 
     global now, one_day_ago, two_days_ago
     try:
