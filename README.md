@@ -21,6 +21,9 @@ A powerful Python CLI that connects to the [Blue Triangle API](https://help.blue
 - Supports top N pages by page views
 - Percentile analysis (p50, p75, p90, p95, p99) in addition to averages
 - Multiple data types: RUM, Synthetic, Native, Basepage
+- **Data filtering** by traffic segment, country, and device type
+- **Executive friction summary** for quick performance insights
+- **Resource file analysis** with pattern matching
 - Slack, Microsoft Teams, and Email notifications
 
 ### Sample Report Screenshot
@@ -200,6 +203,28 @@ thresholds:
 python bt_insights.py --page pdp --alerts
 ```
 
+### Data Filtering
+
+```bash
+# Filter by traffic segment
+python bt_insights.py --page pdp --segment eCommerce
+
+# Filter by country (ISO 3166 codes)
+python bt_insights.py --page pdp --country US CA GB
+
+# Filter by device type
+python bt_insights.py --page pdp --device Mobile
+
+# Combine filters: Mobile users in Canada
+python bt_insights.py --page pdp --country CA --device Mobile
+
+# Analyze specific resource files (supports wildcards)
+python bt_insights.py --page pdp --resource-file "*onelink*"
+
+# Generate executive friction summary
+python bt_insights.py --page pdp --summary
+```
+
 ### Advanced Data Analysis
 
 ```bash
@@ -321,6 +346,16 @@ python bt_insights.py --help
 | `--cache` | Enable API response caching | `--cache` |
 | `--clear-cache` | Clear cache and exit | `--clear-cache` |
 | `--config` | Path to YAML config file | `--config my_config.yaml` |
+
+### Data Filtering
+
+| Flag | Description | Example |
+|------|-------------|---------|
+| `--segment` | Filter by traffic segment(s) | `--segment eCommerce` |
+| `--country` | Filter by country code(s) in ISO 3166 format | `--country US CA GB` |
+| `--device` | Filter by device type(s): Desktop, Mobile, Tablet | `--device Mobile` |
+| `--resource-file` | Analyze specific resource files (supports wildcards) | `--resource-file "*onelink*"` |
+| `--summary` | Show executive friction summary | `--summary` |
 
 ### Advanced Data Options
 
@@ -448,6 +483,9 @@ pytest tests/ -v
 - [x] Add percentile analysis (p50, p75, p90, p95, p99)
 - [x] Add data type selection (RUM, Synthetic, Native, Basepage)
 - [x] Add flexible resource grouping (domain, file, service)
+- [x] Add data filtering (segment, country, device)
+- [x] Add executive friction summary
+- [x] Add resource file pattern analysis
 
 ---
 
