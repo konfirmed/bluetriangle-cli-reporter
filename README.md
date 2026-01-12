@@ -496,9 +496,6 @@ pytest tests/ -v
 
 ---
 
-## Want Dashboards, Alerts, or Hosted UI?
-
-Building a premium version with GitHub/Slack integration, automatic trend detection, and visual dashboards.
 
 ## Questions or Requests
 
