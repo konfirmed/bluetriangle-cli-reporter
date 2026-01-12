@@ -285,7 +285,7 @@ selected_data_type: str = "rum"
 # Options: "domain", "file", "service"
 resource_group_by: str = "domain"
 
-# Resource file filter pattern (e.g., "chunk.273*.js")
+# Resource file filter pattern (e.g., "chunk*.js")
 resource_file_filter: str | None = None
 
 # Traffic segment filter (e.g., ["eCommerce", "Mobile"])
