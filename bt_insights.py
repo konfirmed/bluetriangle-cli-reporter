@@ -288,6 +288,19 @@ resource_group_by: str = "domain"
 # Resource file filter pattern (e.g., "chunk.273*.js")
 resource_file_filter: str | None = None
 
+# Traffic segment filter (e.g., ["eCommerce", "Mobile"])
+segment_filter: list[str] | None = None
+
+# Country filter in ISO 3166 format (e.g., ["US", "CA", "GB"])
+country_filter: list[str] | None = None
+
+# Device filter (e.g., ["Desktop", "Mobile", "Tablet"])
+device_filter: list[str] | None = None
+
+# In-memory cache for performance data to avoid duplicate API calls
+# Key: page_name, Value: {"current": DataFrame, "previous": DataFrame}
+_performance_data_cache: dict[str, dict[str, Any]] = {}
+
 
 # ==================
 # CONFIGURATION FILE
@@ -550,6 +563,145 @@ def get_threshold_alerts(metrics: dict[str, Any]) -> list[str]:
                 pass
 
     return alerts
+
+
+def generate_optimization_insights(metrics: dict[str, Any], delta_metrics: dict[str, float | str]) -> str:
+    """Generate dynamic optimization insights based on actual metric values and thresholds.
+
+    Args:
+        metrics: Dictionary with current metric values (API field names as keys).
+        delta_metrics: Dictionary with delta values (positive = worsened, negative = improved).
+
+    Returns:
+        Markdown formatted optimization insights.
+    """
+    insights = []
+
+    # LCP insights
+    lcp_val = metrics.get("largestContentfulPaint")
+    if lcp_val is not None and lcp_val != "N/A":
+        try:
+            lcp_float = float(lcp_val)
+            status, _ = check_threshold("LCP", lcp_float)
+            lcp_delta = delta_metrics.get("lcp", "N/A")
+
+            if status == "poor":
+                insights.append(
+                    "- **LCP** (POOR - {:.0f}ms):\n"
+                    "  - 🔴 **Critical**: LCP exceeds 4000ms threshold\n"
+                    "  - **Preload** the LCP image using `<link rel=\"preload\">`\n"
+                    "  - **Remove lazy-loading** from above-the-fold images\n"
+                    "  - Consider using a CDN for faster image delivery".format(lcp_float)
+                )
+            elif status == "needs-improvement":
+                insights.append(
+                    "- **LCP** (Needs Improvement - {:.0f}ms):\n"
+                    "  - 🟡 LCP is between 2500-4000ms\n"
+                    "  - **Preload** critical images and fonts\n"
+                    "  - Optimize server response time (TTFB)".format(lcp_float)
+                )
+            else:
+                if isinstance(lcp_delta, (int, float)) and lcp_delta < -50:
+                    insights.append(f"- **LCP** (Good - {lcp_float:.0f}ms): ✅ Improved by {abs(lcp_delta):.0f}ms")
+                else:
+                    insights.append(f"- **LCP** (Good - {lcp_float:.0f}ms): ✅ Within target threshold")
+        except (ValueError, TypeError):
+            pass
+
+    # INP insights
+    inp_val = metrics.get("intToNextPaint")
+    if inp_val is not None and inp_val != "N/A":
+        try:
+            inp_float = float(inp_val)
+            status, _ = check_threshold("INP", inp_float)
+            inp_delta = delta_metrics.get("inp", "N/A")
+
+            if status == "poor":
+                insights.append(
+                    "- **INP** (POOR - {:.0f}ms):\n"
+                    "  - 🔴 **Critical**: INP exceeds 500ms threshold\n"
+                    "  - Break up long JavaScript tasks (>50ms)\n"
+                    "  - Use `requestIdleCallback` for non-critical work\n"
+                    "  - Review and optimize event handlers".format(inp_float)
+                )
+            elif status == "needs-improvement":
+                insights.append(
+                    "- **INP** (Needs Improvement - {:.0f}ms):\n"
+                    "  - 🟡 INP is between 200-500ms\n"
+                    "  - Optimize JavaScript execution time\n"
+                    "  - Consider code-splitting to reduce main thread work".format(inp_float)
+                )
+            else:
+                if isinstance(inp_delta, (int, float)) and inp_delta > 20:
+                    insights.append(f"- **INP** (Good - {inp_float:.0f}ms): ⚠️ Worsened by {inp_delta:.0f}ms - monitor closely")
+                else:
+                    insights.append(f"- **INP** (Good - {inp_float:.0f}ms): ✅ Responsive interactions")
+        except (ValueError, TypeError):
+            pass
+
+    # CLS insights
+    cls_val = metrics.get("cumulativeLayoutShift")
+    if cls_val is not None and cls_val != "N/A":
+        try:
+            cls_float = float(cls_val)
+            status, _ = check_threshold("CLS", cls_float)
+
+            if status == "poor":
+                insights.append(
+                    "- **CLS** (POOR - {:.4f}):\n"
+                    "  - 🔴 **Critical**: CLS exceeds 0.25 threshold\n"
+                    "  - Add `width` and `height` attributes to images/videos\n"
+                    "  - Reserve space for dynamic content (ads, embeds)\n"
+                    "  - Avoid inserting content above existing content".format(cls_float)
+                )
+            elif status == "needs-improvement":
+                insights.append(
+                    "- **CLS** (Needs Improvement - {:.4f}):\n"
+                    "  - 🟡 CLS is between 0.1-0.25\n"
+                    "  - Set explicit dimensions for media elements\n"
+                    "  - Use CSS `aspect-ratio` for responsive images".format(cls_float)
+                )
+            else:
+                insights.append(f"- **CLS** (Good - {cls_float:.4f}): ✅ Minimal layout shift")
+        except (ValueError, TypeError):
+            pass
+
+    # TBT insights
+    tbt_val = metrics.get("totalBlockingTime")
+    if tbt_val is not None and tbt_val != "N/A":
+        try:
+            tbt_float = float(tbt_val)
+            status, _ = check_threshold("TBT", tbt_float)
+
+            if status == "poor":
+                insights.append(
+                    "- **TBT** (POOR - {:.0f}ms):\n"
+                    "  - 🔴 High blocking time affecting interactivity\n"
+                    "  - Defer non-critical JavaScript\n"
+                    "  - Remove unused code and dependencies".format(tbt_float)
+                )
+            elif status == "needs-improvement":
+                insights.append(
+                    "- **TBT** (Needs Improvement - {:.0f}ms):\n"
+                    "  - 🟡 Consider optimizing JavaScript execution".format(tbt_float)
+                )
+        except (ValueError, TypeError):
+            pass
+
+    # Onload insights (based on delta only, no fixed threshold)
+    onload_delta = delta_metrics.get("onload", "N/A")
+    if isinstance(onload_delta, (int, float)):
+        if onload_delta > 500:
+            insights.append(f"- **Onload Time**: 🔴 Worsened by {onload_delta:.0f}ms - investigate recent changes")
+        elif onload_delta > 100:
+            insights.append(f"- **Onload Time**: 🟡 Increased by {onload_delta:.0f}ms")
+        elif onload_delta < -100:
+            insights.append(f"- **Onload Time**: ✅ Improved by {abs(onload_delta):.0f}ms")
+
+    if not insights:
+        return "### 🛠 Optimization Insights\n✅ All metrics within acceptable ranges.\n"
+
+    return "### 🛠 Optimization Insights\n" + "\n".join(insights) + "\n"
 
 
 # ==================
@@ -1142,6 +1294,73 @@ def validate_api_response(
     return True
 
 
+def is_virtual_page(page_name: str) -> bool:
+    """Check if a page is a virtual page (VT) based on naming convention.
+
+    Virtual pages are client-side transitions that don't have full page metrics
+    like LCP and CLS. They typically end with '-VT' or '- VT'.
+
+    Args:
+        page_name: Name of the page to check.
+
+    Returns:
+        True if page is a virtual page, False otherwise.
+    """
+    name_lower = page_name.lower()
+    # Check for common VT suffix patterns
+    return (
+        name_lower.endswith("-vt")
+        or name_lower.endswith("- vt")
+        or "-vt-" in name_lower  # e.g., "cdp-VT-LazyLoad"
+    )
+
+
+def normalize_vt_page_name(page_name: str) -> str:
+    """Normalize VT page name to standard casing (uppercase VT suffix).
+
+    Blue Triangle API is case-sensitive. VT pages typically use uppercase
+    '-VT' suffix. This function corrects common casing variations.
+
+    Args:
+        page_name: Original page name.
+
+    Returns:
+        Normalized page name with correct VT casing.
+    """
+    import re
+
+    # Pattern to match VT suffix variations (case-insensitive)
+    # Handles: -vt, -VT, - vt, - VT, -Vt, etc.
+    patterns = [
+        (r"(-\s*)vt$", r"\1VT"),           # -vt or - vt at end -> -VT or - VT
+        (r"(-\s*)vt(-)", r"\1VT\2"),       # -vt- in middle -> -VT-
+    ]
+
+    result = page_name
+    for pattern, replacement in patterns:
+        result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
+
+    return result
+
+
+def apply_global_filters(payload: dict[str, Any]) -> dict[str, Any]:
+    """Apply global segment, country, and device filters to an API payload.
+
+    Args:
+        payload: The API payload dictionary.
+
+    Returns:
+        Updated payload with filters applied.
+    """
+    if segment_filter:
+        payload["trafficSeg"] = segment_filter
+    if country_filter:
+        payload["country"] = country_filter
+    if device_filter:
+        payload["device"] = device_filter
+    return payload
+
+
 # Retry configuration
 MAX_RETRIES = 3
 RETRY_BACKOFF_BASE = 2  # seconds
@@ -1323,6 +1542,7 @@ def fetch_top_page_names(
         "orderBy": [{"field": "pageViews", "direction": "DESC"}],
     }
 
+    apply_global_filters(payload)
     logger.debug("Fetching top pages: %s", payload)
     data = fetch_data(ENDPOINTS["performance"], payload)
     logger.debug("Top pages response: %s", data)
@@ -1639,57 +1859,73 @@ def summarize_performance(current: dict[str, Any], previous: dict[str, Any]) -> 
 def get_page_performance(page_name: str) -> str:
     """Fetch performance data for a given page and return a Markdown report.
 
+    Uses cached data from gather_page_metrics() if available to avoid
+    duplicate API calls.
+
     Args:
         page_name: Name of the page to analyze.
 
     Returns:
         Markdown formatted performance report.
     """
-    payload: dict[str, Any] = {
-        "site": SITE_PREFIX,
-        "start": one_day_ago,
-        "end": now,
-        "dataType": selected_data_type,
-        "dataColumns": [
-            "onload", "dns", "tcp", "firstByte",
-            "largestContentfulPaint", "totalBlockingTime",
-            "cumulativeLayoutShift", "intToNextPaint",
-        ],
-        "group": ["time"],
-        "limit": 1000,
-        "order": "time",
-        "sort": "asc",
-        "pageName": page_name,
-    }
+    global _performance_data_cache
 
-    # Add percentile settings if specified
-    if selected_percentiles:
-        payload["avgType"] = "percentile"
-        payload["percentile"] = selected_percentiles
+    # Check cache first (populated by gather_page_metrics)
+    cached = _performance_data_cache.get(page_name)
+    if cached:
+        df_today = cached["df_curr"]
+        df_prev = cached["df_prev"]
+        logger.debug("Using cached performance data for %s", page_name)
+    else:
+        # Fallback to fetching if not in cache
+        payload: dict[str, Any] = {
+            "site": SITE_PREFIX,
+            "start": one_day_ago,
+            "end": now,
+            "dataType": selected_data_type,
+            "dataColumns": [
+                "onload", "dns", "tcp", "firstByte",
+                "largestContentfulPaint", "totalBlockingTime",
+                "cumulativeLayoutShift", "intToNextPaint",
+            ],
+            "group": ["time"],
+            "limit": 1000,
+            "order": "time",
+            "sort": "asc",
+            "pageName": page_name,
+        }
 
-    prev_payload = dict(payload)
-    if two_days_ago is not None:
-        prev_payload["start"] = two_days_ago
-        prev_payload["end"] = one_day_ago
+        # Add percentile settings if specified
+        if selected_percentiles:
+            payload["avgType"] = "percentile"
+            payload["percentile"] = selected_percentiles
 
-    logger.debug("Fetching current data for %s: %s", page_name, payload)
-    logger.debug("Fetching previous data for %s: %s", page_name, prev_payload)
+        prev_payload = dict(payload)
+        if two_days_ago is not None:
+            prev_payload["start"] = two_days_ago
+            prev_payload["end"] = one_day_ago
 
-    data_today = fetch_data(ENDPOINTS["performance"], payload)
-    data_prev = (
-        fetch_data(ENDPOINTS["performance"], prev_payload)
-        if two_days_ago
-        else None
-    )
+        apply_global_filters(payload)
+        apply_global_filters(prev_payload)
+        logger.debug("Fetching current data for %s: %s", page_name, payload)
+        logger.debug("Fetching previous data for %s: %s", page_name, prev_payload)
 
-    if (
-        not validate_api_response(data_today, "data")
-        or not validate_api_response(data_prev, "data")
-    ):
-        return f"> ⚠️ No performance data for **{page_name}**.\n"
+        data_today = fetch_data(ENDPOINTS["performance"], payload)
+        data_prev = (
+            fetch_data(ENDPOINTS["performance"], prev_payload)
+            if two_days_ago
+            else None
+        )
 
-    df_today = pd.DataFrame(data_today["data"])
-    df_prev = pd.DataFrame(data_prev["data"])
+        if (
+            not validate_api_response(data_today, "data")
+            or not validate_api_response(data_prev, "data")
+        ):
+            return f"> ⚠️ No performance data for **{page_name}**.\n"
+
+        df_today = pd.DataFrame(data_today["data"])
+        df_prev = pd.DataFrame(data_prev["data"])
+
     if df_today.empty or df_prev.empty:
         return f"> ⚠️ No usable performance data for **{page_name}**.\n"
 
@@ -1697,7 +1933,7 @@ def get_page_performance(page_name: str) -> str:
     p = df_prev.iloc[-1]
 
     # If this is a VT page, explicitly set LCP & CLS to None
-    if "vt" in page_name.lower():
+    if is_virtual_page(page_name):
         t["largestContentfulPaint"] = None
         t["cumulativeLayoutShift"] = None
         p["largestContentfulPaint"] = None
@@ -1729,17 +1965,6 @@ def get_page_performance(page_name: str) -> str:
         except (TypeError, ValueError):
             return "N/A"
 
-    lcp_current = n(t.get("largestContentfulPaint"))
-    lcp_previous = n(p.get("largestContentfulPaint"))
-    delta_lcp = delta(lcp_current, lcp_previous)
-
-    if lcp_current == "N/A" or lcp_previous == "N/A":
-        lcp_insight = "LCP data is not available for comparison."
-    elif isinstance(delta_lcp, (int, float)) and delta_lcp > 0:
-        lcp_insight = "Actions are crucial for optimizing the LCP metric."
-    else:
-        lcp_insight = "LCP is stable."
-
     perf_summary = summarize_performance(t, p)
 
     # Build report sections based on selected metrics
@@ -1768,6 +1993,18 @@ def get_page_performance(page_name: str) -> str:
         pc = percent_change(n(t.get(key)), n(p.get(key)))
         delta_section += f"- **{label}**: Δ {d}{unit_str} ({pc}%)\n"
 
+    # Build delta metrics for dynamic insights
+    delta_metrics = {
+        "lcp": delta(n(t.get("largestContentfulPaint")), n(p.get("largestContentfulPaint"))),
+        "inp": delta(n(t.get("intToNextPaint")), n(p.get("intToNextPaint"))),
+        "cls": delta(n(t.get("cumulativeLayoutShift")), n(p.get("cumulativeLayoutShift"))),
+        "tbt": delta(n(t.get("totalBlockingTime")), n(p.get("totalBlockingTime"))),
+        "onload": delta(n(t.get("onload")), n(p.get("onload"))),
+    }
+
+    # Generate dynamic optimization insights based on thresholds
+    optimization_insights = generate_optimization_insights(dict(t), delta_metrics)
+
     return f"""
 {perf_summary}
 
@@ -1776,15 +2013,7 @@ def get_page_performance(page_name: str) -> str:
 {current_section}
 {previous_section}
 {delta_section}
-### 🛠 Optimization Insights
-- **Onload Time**: {"Improve server response time or defer offscreen images." if isinstance(delta(n(t.get('onload')), n(p.get('onload'))), (int, float)) and delta(n(t.get('onload')), n(p.get('onload'))) > 0 else "Maintain good performance."}
-- **LCP**:
-  - **Recommendations**:
-    - **Preload** images and video poster images to ensure they load immediately.
-    - **Remove lazy-loading** for main content images that contribute to the LCP.
-    - {lcp_insight}
-- **INP**: Optimize your JavaScript and CSS to reduce blocking time.
-- **CLS**: Ensure that dimension attributes for images and video elements are set.
+{optimization_insights}
 """
 
 
@@ -1811,13 +2040,16 @@ def safe_delta(curr: float | None, prev: float | None) -> float | str:
 def gather_page_metrics(page_name: str) -> dict[str, Any] | None:
     """Fetch current and previous page metrics and return a dictionary.
 
+    Also caches the raw data in _performance_data_cache for use by
+    get_page_performance() to avoid duplicate API calls.
+
     Args:
         page_name: Name of the page to analyze.
 
     Returns:
         Dictionary of metrics or None if no data.
     """
-    global now, one_day_ago, two_days_ago
+    global now, one_day_ago, two_days_ago, _performance_data_cache
 
     payload: dict[str, Any] = {
         "site": SITE_PREFIX,
@@ -1846,6 +2078,8 @@ def gather_page_metrics(page_name: str) -> dict[str, Any] | None:
         prev_payload["start"] = two_days_ago
         prev_payload["end"] = one_day_ago
 
+    apply_global_filters(payload)
+    apply_global_filters(prev_payload)
     data_curr = fetch_data(ENDPOINTS["performance"], payload)
     data_prev = (
         fetch_data(ENDPOINTS["performance"], prev_payload)
@@ -1866,6 +2100,12 @@ def gather_page_metrics(page_name: str) -> dict[str, Any] | None:
     if df_curr.empty or df_prev.empty:
         logger.warning("Empty data returned for %s", page_name)
         return None
+
+    # Cache the dataframes for use by get_page_performance()
+    _performance_data_cache[page_name] = {
+        "df_curr": df_curr,
+        "df_prev": df_prev,
+    }
 
     latest_curr = df_curr.iloc[-1]
     latest_prev = df_prev.iloc[-1]
@@ -1901,7 +2141,7 @@ def gather_page_metrics(page_name: str) -> dict[str, Any] | None:
     if selected_percentiles:
         row["percentile"] = selected_percentiles[0]
 
-    is_vt = "vt" in page_name.lower()
+    is_vt = is_virtual_page(page_name)
     onload_delta = safe_delta(row["onload_curr"], row["onload_prev"])
     lcp_delta = safe_delta(row["lcp_curr"], row["lcp_prev"]) if not is_vt else "N/A"
     inp_delta = safe_delta(row["inp_curr"], row["inp_prev"])
@@ -2307,6 +2547,8 @@ def get_resource_data(page_name: str, compare_previous: bool = True) -> str:
         payload_prev["start"] = two_days_ago
         payload_prev["end"] = one_day_ago
 
+    apply_global_filters(payload_curr)
+    apply_global_filters(payload_prev)
     data_curr = fetch_data(ENDPOINTS["resource"], payload_curr)
     if not validate_api_response(data_curr, "data"):
         return f"> ⚠️ No resource data for **{page_name}**.\n"
@@ -2455,7 +2697,14 @@ def get_revenue_opportunity(
     if not opp_data:
         return "> ⚠️ No Revenue Opportunity data found. (Empty response)\n"
 
-    devices_to_check = device if device else list(opp_data.keys())
+    # Filter out "Native" device type as it's not a standard web device category
+    excluded_devices = {"Native"}
+    if device:
+        devices_to_check = device
+    elif isinstance(opp_data, dict):
+        devices_to_check = [k for k in opp_data.keys() if k not in excluded_devices]
+    else:
+        devices_to_check = []
 
     total_lost_revenue = 0.0
     details: list[str] = []
@@ -2603,6 +2852,8 @@ def get_metric_cost_breakdown(page_name: str) -> str:
         prev_payload["start"] = two_days_ago
         prev_payload["end"] = one_day_ago
 
+    apply_global_filters(payload)
+    apply_global_filters(prev_payload)
     data_curr = fetch_data(ENDPOINTS["performance"], payload)
     data_prev = fetch_data(ENDPOINTS["performance"], prev_payload) if two_days_ago else None
 
@@ -2870,6 +3121,7 @@ def get_cost_trend(page_name: str) -> str:
             "pageName": page_name,
         }
 
+        apply_global_filters(payload)
         data = fetch_data(ENDPOINTS["performance"], payload)
         if not validate_api_response(data, "data"):
             continue
@@ -3029,6 +3281,7 @@ def generate_friction_summary(pages: list[str], show_progress: bool = True) -> s
                 "pageName": page_name,
             }
 
+            apply_global_filters(payload)
             data = fetch_data(ENDPOINTS["performance"], payload)
             if not validate_api_response(data, "data"):
                 continue
@@ -3183,6 +3436,8 @@ def get_resource_file_analysis(page_name: str) -> str:
         payload_prev["start"] = two_days_ago
         payload_prev["end"] = one_day_ago
 
+    apply_global_filters(payload_curr)
+    apply_global_filters(payload_prev)
     data_curr = fetch_data(ENDPOINTS["resource"], payload_curr)
     data_prev = fetch_data(ENDPOINTS["resource"], payload_prev) if two_days_ago else None
 
@@ -3304,6 +3559,11 @@ def build_page_report(page_name: str) -> str:
     if resource_file_section:
         text += resource_file_section + "\n\n"
 
+    # JavaScript errors section
+    js_errors_section = get_js_errors(page_name)
+    if js_errors_section and "No aggregated JS error" not in js_errors_section:
+        text += js_errors_section + "\n\n"
+
     text += get_page_revenue(page_name) + "\n\n"
     text += get_revenue_opportunity(page_name) + "\n\n"
 
@@ -3337,6 +3597,11 @@ def generate_full_report(
     Returns:
         Tuple of (Markdown formatted report, list of metric rows for export).
     """
+    global _performance_data_cache
+
+    # Clear the performance data cache at the start of each report
+    _performance_data_cache.clear()
+
     table_rows: list[dict[str, Any]] = []
     total = len(pages)
 
@@ -3412,6 +3677,12 @@ def generate_full_report(
         settings_parts.append(f"**Data Type:** {selected_data_type.upper()}")
     if resource_group_by != "domain":
         settings_parts.append(f"**Resource Grouping:** {resource_group_by}")
+    if segment_filter:
+        settings_parts.append(f"**Segment:** {', '.join(segment_filter)}")
+    if country_filter:
+        settings_parts.append(f"**Country:** {', '.join(country_filter)}")
+    if device_filter:
+        settings_parts.append(f"**Device:** {', '.join(device_filter)}")
     if settings_parts:
         big_md += "> " + " | ".join(settings_parts) + "\n\n"
 
@@ -3988,6 +4259,25 @@ Environment Variables:
         help="Compare two time periods (4 epoch timestamps)",
     )
 
+    # Data filtering options
+    filter_group = parser.add_argument_group("Data Filtering")
+    filter_group.add_argument(
+        "--segment",
+        nargs="+",
+        help="Filter by traffic segment(s) - must match exactly as configured in Blue Triangle",
+    )
+    filter_group.add_argument(
+        "--country",
+        nargs="+",
+        help="Filter by country code(s) in ISO 3166 format (e.g., US, CA, GB)",
+    )
+    filter_group.add_argument(
+        "--device",
+        nargs="+",
+        choices=["Desktop", "Mobile", "Tablet"],
+        help="Filter by device type(s)",
+    )
+
     # Output options
     output_group = parser.add_argument_group("Output Options")
     output_group.add_argument(
@@ -4145,7 +4435,7 @@ _bt_insights_completions() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    opts="--page --top-pages --time-range --start --end --multi-range --compare --output --format --metrics --slack-webhook --teams-webhook --email-to --email-subject --email-attach --config --cache --clear-cache --alerts --generate-completion --percentile --data-type --resource-group --resource-file --summary --test-connection --no-color --quiet --verbose --dry-run --help"
+    opts="--page --top-pages --time-range --start --end --multi-range --compare --segment --country --output --format --metrics --slack-webhook --teams-webhook --email-to --email-subject --email-attach --config --cache --clear-cache --alerts --generate-completion --percentile --data-type --resource-group --resource-file --summary --test-connection --no-color --quiet --verbose --dry-run --help"
 
     case "${prev}" in
         --time-range)
@@ -4220,6 +4510,8 @@ _bt_insights() {
         '--end[Custom end time (epoch)]:timestamp:' \\
         '--multi-range[Multiple time ranges]:ranges:' \\
         '--compare[Compare two periods]:timestamps:' \\
+        '--segment[Filter by traffic segment]:segment:' \\
+        '--country[Filter by country code (ISO 3166)]:country:' \\
         {-o,--output}'[Output filename]:file:_files' \\
         {-f,--format}'[Output format]:format:($formats)' \\
         '--metrics[Filter metrics]:metrics:($metrics)' \\
@@ -4408,6 +4700,21 @@ def main() -> None:
         if show_progress:
             print_info(f"Resource file filter: {args.resource_file}")
 
+    # Set segment, country, and device filters
+    global segment_filter, country_filter, device_filter
+    if args.segment:
+        segment_filter = args.segment
+        if show_progress:
+            print_info(f"Traffic segment filter: {', '.join(args.segment)}")
+    if args.country:
+        country_filter = [c.upper() for c in args.country]  # Normalize to uppercase
+        if show_progress:
+            print_info(f"Country filter: {', '.join(country_filter)}")
+    if args.device:
+        device_filter = args.device
+        if show_progress:
+            print_info(f"Device filter: {', '.join(args.device)}")
+
     global now, one_day_ago, two_days_ago
     try:
         start, end, prev_start, prev_end, multi_list = parse_time_args(args)
@@ -4444,9 +4751,13 @@ def main() -> None:
         if show_progress:
             print_success(f"Found {len(pages)} pages")
     elif args.page:
-        # Trust user-provided page names - API will return empty data if invalid
-        pages = args.page
+        # Normalize VT page names to correct casing (API is case-sensitive)
+        pages = [normalize_vt_page_name(p) for p in args.page]
         if show_progress:
+            # Show if any pages were normalized
+            for orig, norm in zip(args.page, pages):
+                if orig != norm:
+                    print_info(f"Normalized page name: '{orig}' → '{norm}'")
             print_info(f"Analyzing {len(pages)} page(s): {', '.join(pages)}")
     else:
         if show_progress:
