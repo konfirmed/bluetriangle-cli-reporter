@@ -4435,7 +4435,7 @@ _bt_insights_completions() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    opts="--page --top-pages --time-range --start --end --multi-range --compare --segment --country --output --format --metrics --slack-webhook --teams-webhook --email-to --email-subject --email-attach --config --cache --clear-cache --alerts --generate-completion --percentile --data-type --resource-group --resource-file --summary --test-connection --no-color --quiet --verbose --dry-run --help"
+    opts="--page --top-pages --time-range --start --end --multi-range --compare --segment --country --device --output --format --metrics --slack-webhook --teams-webhook --email-to --email-subject --email-attach --config --cache --clear-cache --alerts --generate-completion --percentile --data-type --resource-group --resource-file --summary --test-connection --no-color --quiet --verbose --dry-run --help"
 
     case "${prev}" in
         --time-range)
@@ -4466,6 +4466,10 @@ _bt_insights_completions() {
             COMPREPLY=( $(compgen -W "domain file service" -- ${cur}) )
             return 0
             ;;
+        --device)
+            COMPREPLY=( $(compgen -W "Desktop Mobile Tablet" -- ${cur}) )
+            return 0
+            ;;
         --output|-o|--config)
             COMPREPLY=( $(compgen -f -- ${cur}) )
             return 0
@@ -4492,7 +4496,7 @@ complete -F _bt_insights_completions python bt_insights.py
 # Add this to your .zshrc or place in your fpath
 
 _bt_insights() {
-    local -a opts time_ranges formats metrics shells percentiles data_types resource_groups
+    local -a opts time_ranges formats metrics shells percentiles data_types resource_groups devices
 
     time_ranges=(qd hd 24h xd 2d 6d 7d 28d 30d 90d 1y 2y 3y)
     formats=(markdown json csv html pdf)
@@ -4501,6 +4505,7 @@ _bt_insights() {
     percentiles=(50 75 90 95 99)
     data_types=(rum synthetic native basepage)
     resource_groups=(domain file service)
+    devices=(Desktop Mobile Tablet)
 
     _arguments -C \\
         '--page[Specify page names]:page:' \\
@@ -4512,6 +4517,7 @@ _bt_insights() {
         '--compare[Compare two periods]:timestamps:' \\
         '--segment[Filter by traffic segment]:segment:' \\
         '--country[Filter by country code (ISO 3166)]:country:' \\
+        '--device[Filter by device type]:device:($devices)' \\
         {-o,--output}'[Output filename]:file:_files' \\
         {-f,--format}'[Output format]:format:($formats)' \\
         '--metrics[Filter metrics]:metrics:($metrics)' \\
