@@ -73,7 +73,7 @@ python bt_insights.py --test-connection
 ### 4. Generate a Report
 
 ```bash
-python bt_insights.py --page pdp checkout --time-range 7d --output report.md
+python bt_insights.py --page homepage checkout --time-range 7d --output report.md
 ```
 
 ---
@@ -103,7 +103,7 @@ python bt_insights.py --page pdp checkout --time-range 7d --output report.md
 
 ```bash
 # Analyze specific pages over 7 days
-python bt_insights.py --page pdp checkout --time-range 7d
+python bt_insights.py --page homepage checkout --time-range 7d
 
 # Analyze top 20 pages by traffic
 python bt_insights.py --top-pages --time-range 28d
@@ -116,47 +116,47 @@ python bt_insights.py --page homepage --metrics LCP INP CLS
 
 ```bash
 # Default: Markdown report
-python bt_insights.py --page pdp -o report.md
+python bt_insights.py --page homepage -o report.md
 
 # Export as JSON (for programmatic use)
-python bt_insights.py --page pdp --format json -o metrics.json
+python bt_insights.py --page homepage --format json -o metrics.json
 
 # Export as CSV (for spreadsheets)
-python bt_insights.py --page pdp --format csv -o metrics.csv
+python bt_insights.py --page homepage --format csv -o metrics.csv
 
 # Export as PDF with charts
-python bt_insights.py --page pdp --format pdf -o report.pdf
+python bt_insights.py --page homepage --format pdf -o report.pdf
 ```
 
 ### Multi-Range Reports
 
 ```bash
 # Compare across multiple time ranges
-python bt_insights.py --page pdp --multi-range 24h,7d,28d -o comparison.md
+python bt_insights.py --page homepage --multi-range 24h,7d,28d -o comparison.md
 ```
 
 ### Quiet Mode (for scripts)
 
 ```bash
 # Suppress progress output
-python bt_insights.py --page pdp --quiet -o report.md
+python bt_insights.py --page homepage --quiet -o report.md
 
 # Disable colors (for piping/logging)
-python bt_insights.py --page pdp --no-color
+python bt_insights.py --page homepage --no-color
 ```
 
 ### HTML Reports with Charts
 
 ```bash
 # Generate HTML report with embedded Chart.js visualizations
-python bt_insights.py --page pdp checkout --format html -o report.html
+python bt_insights.py --page homepage checkout --format html -o report.html
 ```
 
 ### API Caching
 
 ```bash
 # Enable caching to speed up repeated requests (1 hour TTL)
-python bt_insights.py --page pdp --cache
+python bt_insights.py --page homepage --cache
 
 # Clear the cache
 python bt_insights.py --clear-cache
@@ -166,7 +166,7 @@ python bt_insights.py --clear-cache
 
 ```bash
 # Use a custom config file
-python bt_insights.py --page pdp --config my_config.yaml
+python bt_insights.py --page homepage --config my_config.yaml
 
 # Default locations searched: bt_config.yaml, ~/.bt_config.yaml
 ```
@@ -200,55 +200,55 @@ thresholds:
 
 ```bash
 # Show alerts for metrics exceeding Web Vitals thresholds
-python bt_insights.py --page pdp --alerts
+python bt_insights.py --page homepage --alerts
 ```
 
 ### Data Filtering
 
 ```bash
 # Filter by traffic segment
-python bt_insights.py --page pdp --segment eCommerce
+python bt_insights.py --page homepage --segment eCommerce
 
 # Filter by country (ISO 3166 codes)
-python bt_insights.py --page pdp --country US CA GB
+python bt_insights.py --page homepage --country US CA GB
 
 # Filter by device type
-python bt_insights.py --page pdp --device Mobile
+python bt_insights.py --page homepage --device Mobile
 
 # Combine filters: Mobile users in Canada
-python bt_insights.py --page pdp --country CA --device Mobile
+python bt_insights.py --page homepage --country CA --device Mobile
 
 # Analyze specific resource files (supports wildcards)
-python bt_insights.py --page pdp --resource-file "*onelink*"
+python bt_insights.py --page homepage --resource-file "*onelink*"
 
 # Generate executive friction summary
-python bt_insights.py --page pdp --summary
+python bt_insights.py --page homepage --summary
 ```
 
 ### Advanced Data Analysis
 
 ```bash
 # Use 90th percentile instead of averages
-python bt_insights.py --page pdp --percentile 90
+python bt_insights.py --page homepage --percentile 90
 
 # Use median (50th percentile)
-python bt_insights.py --page pdp --percentile 50
+python bt_insights.py --page homepage --percentile 50
 
 # Analyze synthetic monitoring data instead of RUM
-python bt_insights.py --page pdp --data-type synthetic
+python bt_insights.py --page homepage --data-type synthetic
 
 # Group resources by file instead of domain
-python bt_insights.py --page pdp --resource-group file
+python bt_insights.py --page homepage --resource-group file
 
 # Combine options: 95th percentile synthetic data grouped by service
-python bt_insights.py --page pdp --percentile 95 --data-type synthetic --resource-group service
+python bt_insights.py --page homepage --percentile 95 --data-type synthetic --resource-group service
 ```
 
 ### Period Comparison
 
 ```bash
 # Compare two time periods (epoch timestamps)
-python bt_insights.py --page pdp --compare 1704067200 1704672000 1704672000 1705276800
+python bt_insights.py --page homepage --compare 1704067200 1704672000 1704672000 1705276800
 ```
 
 ### Shell Completion
@@ -265,7 +265,7 @@ python bt_insights.py --generate-completion zsh > ~/.zsh/completions/_bt_insight
 
 ```bash
 # Enable verbose logging
-python bt_insights.py --page pdp --verbose
+python bt_insights.py --page homepage --verbose
 
 # Test API connection
 python bt_insights.py --test-connection
@@ -275,19 +275,19 @@ python bt_insights.py --test-connection
 
 ```bash
 # Send report notification to Slack
-python bt_insights.py --page pdp --slack-webhook https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+python bt_insights.py --page homepage --slack-webhook https://hooks.slack.com/services/YOUR/WEBHOOK/URL
 
 # Send report notification to Microsoft Teams
-python bt_insights.py --page pdp --teams-webhook https://outlook.office.com/webhook/YOUR/WEBHOOK/URL
+python bt_insights.py --page homepage --teams-webhook https://outlook.office.com/webhook/YOUR/WEBHOOK/URL
 
 # Send report via email (requires SMTP environment variables)
-python bt_insights.py --page pdp --email-to recipient@example.com --email-subject "Weekly Report"
+python bt_insights.py --page homepage --email-to recipient@example.com --email-subject "Weekly Report"
 
 # Attach report file to email
-python bt_insights.py --page pdp --email-to recipient@example.com --email-attach
+python bt_insights.py --page homepage --email-to recipient@example.com --email-attach
 
 # Combine multiple notifications
-python bt_insights.py --page pdp --slack-webhook URL --email-to user@example.com
+python bt_insights.py --page homepage --slack-webhook URL --email-to user@example.com
 ```
 
 **Email Configuration:** Set these environment variables for email notifications:
@@ -308,7 +308,7 @@ python bt_insights.py --help
 
 | Flag | Description | Example |
 |------|-------------|---------|
-| `--page` | Specify page names to analyze | `--page pdp checkout` |
+| `--page` | Specify page names to analyze | `--page homepage checkout` |
 | `--top-pages` | Analyze top 20 pages by views | `--top-pages` |
 
 ### Time Range
@@ -423,7 +423,7 @@ python bt_insights.py --help
 ```
 | Page     | Onload (Curr) | Onload (Prev) | LCP (Curr) | LCP (Prev) | ...
 |----------|---------------|---------------|------------|------------|-----
-| pdp      | 2800          | 2900          | 1800       | 2100       | ...
+| homepage      | 2800          | 2900          | 1800       | 2100       | ...
 ```
 
 ### JSON Output
@@ -431,7 +431,7 @@ python bt_insights.py --help
 ```json
 [
   {
-    "page": "pdp",
+    "page": "homepage",
     "onload_curr": 2800,
     "onload_prev": 2900,
     "lcp_curr": 1800,
